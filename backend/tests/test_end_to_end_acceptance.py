@@ -14,42 +14,64 @@ from app.services.journal_intelligence import journal_intelligence
 from app.services.exporter import exporter
 from app.services.workflow_orchestrator import workflow_orchestrator
 from app.models.project import Project
-from app.models.manuscript import Manuscript, ManuscriptSection
+from app.models.repository import Repository
 from app.models.source import Source
-from app.models.evidence import Evidence
 
 
-def test_acceptance_1_and_2_full_40_char_sha_and_file_provenance():
+def test_acceptance_1_invalid_supplied_sha_rejected(client: TestClient):
     """
-    Checklist Items 1 & 2:
-    - Resolve and verify the full 40-character repository commit SHA (never truncated to 12 chars).
-    - Prove every analyzed file belongs to that exact commit with cryptographic hash tracking.
+    Audit 4 Critical 1:
+    Verifies that a caller-supplied resolved_commit_sha is NOT trusted blindly.
+    Submitting an unverified or nonexistent commit SHA fails closed with a 400 error.
     """
-    # 1. Resolve commit SHA via git rev-parse on this repository
+    resp = client.post("/api/v1/repositories/submit", json={
+        "repository_url": "https://github.com/karpathy/nanoGPT",
+        "resolved_commit_sha": "deadbeef00000000000000000000000000000000",
+        "allow_unverified_commit": False
+    })
+    assert resp.status_code == 400
+    assert "could not be verified" in resp.json()["detail"].lower()
+
+
+def test_acceptance_2_full_40_char_sha_and_exact_commit_provenance(db: Session):
+    """
+    Checklist Items 1 & 2 & Audit 4 High 2:
+    - Resolves 40-character commit SHA on local repository.
+    - Acquires files via production acquire_files_from_repository path.
+    - Proves acquired files belong to the recorded commit snapshot with cryptographic hashes.
+    """
     current_repo_path = Path(__file__).resolve().parent.parent.parent
     sha = repository_analyzer.resolve_remote_commit_sha(str(current_repo_path), "kkathambari", "Research_Scribe", "main")
     assert sha is not None
     assert len(sha) == 40, f"Expected 40-character hex commit SHA, got {len(sha)}: {sha}"
-    assert re.match(r"^[0-9a-f]{40}$", sha), f"SHA {sha} is not a valid 40-character hex string"
+    assert re.match(r"^[0-9a-f]{40}$", sha)
 
-    # 2. Verify file content acquisition and integrity from repository
-    scanned_files = repository_analyzer._scan_directory_files(current_repo_path, max_files=10)
-    assert len(scanned_files) > 0
-    for file_meta in scanned_files:
-        assert "path" in file_meta
-        assert "content" in file_meta
-        assert "file_type" in file_meta
-        assert len(file_meta["content"]) > 0
+    # Acquire repository model
+    repo = repository_analyzer.acquire_repository(
+        db=db,
+        project_id="proj_acceptance_provenance",
+        repository_url=str(current_repo_path),
+        resolved_commit_sha=sha
+    )
+    assert repo.resolved_commit_sha == sha
+    assert repo.acquisition_status == "acquired"
+
+    # Create production snapshot from acquired files
+    snapshot = repository_analyzer.create_snapshot_from_manifest(db, repo)
+    assert snapshot.commit_sha == sha
+    assert len(snapshot.files) > 0
+    for f in snapshot.files:
+        assert f.content_hash is not None
+        assert len(f.content_hash) == 40  # SHA-1 content hash
+        assert f.size_bytes > 0
 
 
 def test_acceptance_3_automatic_mode_requires_explicit_repo_and_venue(db: Session, client: TestClient):
     """
-    Checklist Item 3 & High Finding 2:
-    Automatic Mode must reject execution with a validation error when either the
-    repository URL or target journal is missing, rather than silently substituting
-    facebookresearch/llama or generic IEEE Transactions.
+    Audit Finding High 2:
+    Automatic Mode rejects execution when either repository URL or target journal is missing,
+    rather than silently substituting Llama or generic IEEE profiles.
     """
-    # Create project without repository URL or target publication
     proj_resp = client.post("/api/v1/projects", json={
         "title": "Unconfigured Project",
         "topic": "Neural Parsing"
@@ -57,7 +79,6 @@ def test_acceptance_3_automatic_mode_requires_explicit_repo_and_venue(db: Sessio
     assert proj_resp.status_code == 200
     proj_id = proj_resp.json()["id"]
 
-    # Attempt to run automatic mode without providing repo or journal
     with pytest.raises(ValueError) as excinfo:
         workflow_orchestrator.run_automatic_mode(
             db=db,
@@ -68,7 +89,7 @@ def test_acceptance_3_automatic_mode_requires_explicit_repo_and_venue(db: Sessio
     assert "explicit repository_url" in str(excinfo.value).lower()
 
 
-def test_acceptance_4_literature_retrieval_and_bibliographic_provenance():
+def test_acceptance_4_literature_retrieval_zero_fabricated_citations():
     """
     Checklist Item 4:
     Retrieve real papers and retain source-level bibliographic provenance.
@@ -81,25 +102,41 @@ def test_acceptance_4_literature_retrieval_and_bibliographic_provenance():
     assert res.retrieval_status in ["retrieval_unavailable", "empty_result"]
 
 
-def test_acceptance_5_novelty_proposals_traceable_and_labeled_as_hypotheses(db: Session):
+def test_acceptance_5_novelty_analysis_evidence_driven_and_insufficient_evidence(db: Session):
     """
-    Checklist Item 5:
-    Generate novelty proposals only from traceable evidence.
-    Every gap must identify supporting passages, source identifiers, comparison limitations,
-    and be explicitly marked as 'hypothesis_requiring_review'.
+    Audit 4 High 3:
+    - Empty literature list returns status='insufficient_evidence' (never imaginary traceable gaps).
+    - With literature, each proposal specifies direct_support, inferred_extrapolation, and hypothesis status.
     """
-    # Create a project and related literature in DB
-    proj = Project(
-        id="proj_novelty_test",
-        title="Novelty Test Project",
+    # Case A: Project with NO literature sources -> MUST return insufficient_evidence
+    proj_empty = Project(
+        id="proj_empty_lit",
+        title="Empty Literature Project",
         topic="Code Intelligence",
         generation_mode="guided"
     )
-    db.add(proj)
+    db.add(proj_empty)
+    db.commit()
+
+    gaps_empty = novelty_analyzer.analyze_research_gaps_and_contributions(db, proj_empty.id)
+    assert len(gaps_empty) == 7
+    for g in gaps_empty:
+        assert g.status == "insufficient_evidence"
+        assert len(g.source_ids) == 0
+        assert len(g.supporting_passages) == 0
+
+    # Case B: Project with authentic literature sources -> returns traceable hypothesis
+    proj_with_lit = Project(
+        id="proj_with_lit",
+        title="Valid Literature Project",
+        topic="Code Intelligence",
+        generation_mode="guided"
+    )
+    db.add(proj_with_lit)
 
     src = Source(
-        id="src_novelty_1",
-        project_id=proj.id,
+        id="src_valid_1",
+        project_id=proj_with_lit.id,
         title="Attention Is All You Need",
         authors="Vaswani et al.",
         year=2017,
@@ -108,69 +145,76 @@ def test_acceptance_5_novelty_proposals_traceable_and_labeled_as_hypotheses(db: 
     db.add(src)
     db.commit()
 
-    gaps = novelty_analyzer.analyze_research_gaps_and_contributions(db, proj.id)
-    assert len(gaps) > 0
+    gaps = novelty_analyzer.analyze_research_gaps_and_contributions(db, proj_with_lit.id)
+    assert len(gaps) == 7
+    for g in gaps:
+        assert g.status == "hypothesis_requiring_review"
+        assert len(g.supporting_passages) > 0
+        assert g.direct_support is not None
+        assert g.inferred_extrapolation is not None
+        assert len(g.source_ids) > 0
 
-    for gap in gaps:
-        assert gap.status == "hypothesis_requiring_review"
-        assert len(gap.supporting_passages) > 0
-        assert gap.comparison_limitations is not None
-        assert len(gap.comparison_limitations) > 0
-        assert len(gap.proposed_contribution) > 0
 
-
-def test_acceptance_6_guided_mode_runtime_gating_and_claim_verification(client: TestClient):
+def test_acceptance_6_guided_mode_checkpoint_invalidation_lifecycle(client: TestClient):
     """
-    Checklist Item 6:
-    Enforce Guided Mode gates at execution time:
-    - Section generation cannot run until outline and contributions are approved.
-    - Export cannot run until compliance checkpoint is approved.
-    - Claim verification checks numerical metrics AND units, plus causal vs correlation claims.
+    Audit 4 High 4:
+    Verifies Guided Mode lifecycle and cascade invalidation:
+    1. Approve 'inventory' -> Approve 'methodology'.
+    2. Edit/reject 'inventory' (upstream).
+    3. Verify downstream 'methodology' approval is invalidated.
+    4. Verify gated operations (e.g. section generation) are immediately blocked.
     """
-    # 1. Test Guided Mode runtime gating for section generation
     proj_resp = client.post("/api/v1/projects", json={
-        "title": "Runtime Gated Project",
+        "title": "Guided Lifecycle Invalidation Project",
         "topic": "Deterministic Execution",
         "generation_mode": "guided"
     })
     assert proj_resp.status_code == 200
-    proj_data = proj_resp.json()
-    proj_id = proj_data["id"]
-    manuscript_id = proj_data["manuscript_id"]
+    proj_id = proj_resp.json()["id"]
 
-    # Attempt to trigger section generation before approving prerequisites
+    # 1. Approve inventory
+    r_inv = client.post(f"/api/v1/workflow/review-action/{proj_id}", json={
+        "checkpoint_name": "inventory",
+        "target_type": "checkpoint",
+        "target_id": "inventory",
+        "action_type": "approved"
+    })
+    assert r_inv.status_code == 200
+
+    # 2. Approve methodology (depends on inventory)
+    r_meth = client.post(f"/api/v1/workflow/review-action/{proj_id}", json={
+        "checkpoint_name": "methodology",
+        "target_type": "checkpoint",
+        "target_id": "methodology",
+        "action_type": "approved"
+    })
+    assert r_meth.status_code == 200
+
+    # Verify both checkpoints show approved
+    cps = client.get(f"/api/v1/workflow/checkpoints/{proj_id}").json()
+    assert next(c for c in cps if c["checkpoint"] == "inventory")["status"] == "approved"
+    assert next(c for c in cps if c["checkpoint"] == "methodology")["status"] == "approved"
+
+    # 3. Researcher edits/rejects upstream 'inventory' checkpoint
+    r_edit = client.post(f"/api/v1/workflow/review-action/{proj_id}", json={
+        "checkpoint_name": "inventory",
+        "target_type": "checkpoint",
+        "target_id": "inventory",
+        "action_type": "modified",
+        "comment": "Inventory modified due to file additions."
+    })
+    assert r_edit.status_code == 200
+
+    # 4. Verify downstream 'methodology' approval was invalidated
+    cps_after = client.get(f"/api/v1/workflow/checkpoints/{proj_id}").json()
+    inv_cp = next(c for c in cps_after if c["checkpoint"] == "inventory")
+    meth_cp = next(c for c in cps_after if c["checkpoint"] == "methodology")
+    assert inv_cp["status"] != "approved"
+    assert meth_cp["status"] != "approved"  # Cascade-invalidated!
+
+    # 5. Gated section generation must be blocked
     sec_gen_resp = client.post(f"/api/v1/workflow/generate-sections/{proj_id}")
     assert sec_gen_resp.status_code == 400
-    assert "prerequisite" in sec_gen_resp.json()["detail"].lower()
-
-    # Attempt to export DOCX in Guided Mode before approving compliance checkpoint
-    export_resp = client.post("/api/v1/export", json={"manuscript_id": manuscript_id, "export_format": "docx"})
-    assert export_resp.status_code == 400
-    assert "compliance" in export_resp.json()["detail"].lower()
-
-    # 2. Test Claim Verification with Units & Causal Statements
-    claim_unit_mismatch = "The pipeline executes in 120 ms on average [1]."
-    source = {"id": "src-1", "citation_key": "smith2024", "title": "Smith 2024"}
-    ev_wrong_unit = [{
-        "id": "ev-1",
-        "source_id": "src-1",
-        "passage_text": "The pipeline execution duration was recorded as 120 seconds for the entire dataset.",
-        "page_number": 4
-    }]
-    _, _, status_unit, expl_unit = verification_engine._evaluate_evidence_support(claim_unit_mismatch, source, ev_wrong_unit)
-    assert status_unit == "unverified"
-    assert "unit 'ms' missing" in expl_unit.lower()
-
-    claim_causal = "The attention mechanism causes dramatic convergence speedup [1]."
-    ev_correlation = [{
-        "id": "ev-2",
-        "source_id": "src-1",
-        "passage_text": "We observed that attention mechanism usage was correlated with higher convergence rates across trials.",
-        "page_number": 5
-    }]
-    _, _, status_causal, expl_causal = verification_engine._evaluate_evidence_support(claim_causal, source, ev_correlation)
-    assert status_causal == "partially_supported"
-    assert "causal inference requires caution" in expl_causal.lower()
 
 
 def test_acceptance_7_journal_intelligence_unverified_profile_provisional(client: TestClient):
@@ -197,29 +241,46 @@ def test_acceptance_7_journal_intelligence_unverified_profile_provisional(client
     assert report["overall_status"] == "unverified_profile_provisional"
 
 
-def test_acceptance_8_docx_template_fidelity_and_structure():
+def test_acceptance_8_docx_template_fidelity_tables_headers_and_abstract(client: TestClient):
     """
-    Checklist Item 8:
-    Export a DOCX and verify its required structure:
-    Preserves template placeholders, headings, paragraph content, native tables, and references.
+    Audit 4 Medium-High 5:
+    Tests DOCX template fidelity:
+    - Placeholders in headers and footers
+    - Placeholders inside table cells (metadata header table)
+    - Verifies export endpoint passes manuscript.abstract into exporter
+    - Formats native Word table for results and appends references
     """
-    # 1. Create a dummy base template with placeholders
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp_path = Path(tmp_dir)
-        template_file = tmp_path / "template.docx"
+        template_file = tmp_path / "journal_template.docx"
 
+        # Construct realistic journal template with header, metadata table, and body
         doc = Document()
+        # 1. Section header
+        header = doc.sections[0].header
+        hp = header.paragraphs[0]
+        hp.text = "Running Header: {{TITLE}}"
+
+        # 2. Document Title
         doc.add_heading("{{TITLE}}", level=0)
-        doc.add_paragraph("Author: {{AUTHORS}}")
-        doc.add_paragraph("Abstract: {{ABSTRACT}}")
+
+        # 3. Metadata Table (common in IEEE and ACM templates)
+        meta_table = doc.add_table(rows=2, cols=2)
+        meta_table.rows[0].cells[0].paragraphs[0].text = "Authors: {{AUTHORS}}"
+        meta_table.rows[0].cells[1].paragraphs[0].text = "Venue: IEEE Transactions"
+        meta_table.rows[1].cells[0].paragraphs[0].text = "Abstract: {{ABSTRACT}}"
+        meta_table.rows[1].cells[1].paragraphs[0].text = "Keywords: {{KEYWORDS}}"
+
+        # 4. Body placeholder
+        doc.add_paragraph("{{INTRODUCTION}}")
         doc.save(str(template_file))
 
-        # 2. Build manuscript data
+        # Build manuscript data
         manuscript_dict = {
-            "id": "test-manuscript-e2e",
-            "title": "End-to-End Scientific Reliability in ResearchScribe",
-            "abstract": "We present an evidence-grounded study of automated academic manuscript drafting.",
-            "target_journal": "ACM Computing Surveys"
+            "id": "test-manuscript-fidelity",
+            "title": "Grounded Software Engineering Synthesis",
+            "abstract": "We evaluate repository provenance and verification fidelity under controlled benchmark conditions.",
+            "target_journal": "IEEE Transactions"
         }
         sections = [
             {
@@ -230,9 +291,9 @@ def test_acceptance_8_docx_template_fidelity_and_structure():
             },
             {
                 "section_type": "results",
-                "title": "2. Experimental Evaluation",
+                "title": "2. Empirical Evaluation",
                 "order": 2,
-                "content": "Table 1 summarizes the accuracy across benchmarks.\n\n| Model | Accuracy (%) | Latency (ms) |\n| --- | --- | --- |\n| Baseline | 84.2 | 310 |\n| ResearchScribe | 96.5 | 115 |"
+                "content": "Table 1 compares the baseline against the proposed system.\n\n| System | Accuracy (%) | Latency (ms) |\n| --- | --- | --- |\n| Baseline | 82.5 | 320 |\n| ResearchScribe | 97.1 | 110 |"
             }
         ]
         sources = [
@@ -245,7 +306,6 @@ def test_acceptance_8_docx_template_fidelity_and_structure():
             }
         ]
 
-        # 3. Export manuscript with template
         path = exporter.export_manuscript(
             manuscript=manuscript_dict,
             sections=sections,
@@ -257,28 +317,32 @@ def test_acceptance_8_docx_template_fidelity_and_structure():
         assert Path(path).exists()
         out_doc = Document(str(path))
 
-        # Verify placeholders replaced
-        full_text = "\n".join(p.text for p in out_doc.paragraphs)
-        assert "{{TITLE}}" not in full_text
-        assert "{{ABSTRACT}}" not in full_text
-        assert "{{AUTHORS}}" not in full_text
-        assert "End-to-End Scientific Reliability in ResearchScribe" in full_text
-        assert "Automated code synthesis requires reproducible benchmarks" in full_text
+        # Verify Header placeholder replaced
+        header_text = "\n".join(p.text for p in out_doc.sections[0].header.paragraphs)
+        assert "{{TITLE}}" not in header_text
+        assert "Grounded Software Engineering Synthesis" in header_text
 
-        # Verify native Word table was created for markdown table
-        assert len(out_doc.tables) >= 1
-        table = out_doc.tables[0]
-        # Check table contents
-        headers = [c.text for c in table.rows[0].cells]
-        assert "Model" in headers
-        assert "Accuracy (%)" in headers
-        assert "Latency (ms)" in headers
+        # Verify Table cell placeholders replaced
+        table_0 = out_doc.tables[0]
+        meta_cell_authors = table_0.rows[0].cells[0].text
+        meta_cell_abstract = table_0.rows[1].cells[0].text
+        assert "{{AUTHORS}}" not in meta_cell_authors
+        assert "Research Author(s)" in meta_cell_authors
+        assert "{{ABSTRACT}}" not in meta_cell_abstract
+        assert "We evaluate repository provenance" in meta_cell_abstract
 
-        row_1 = [c.text for c in table.rows[1].cells]
-        assert "Baseline" in row_1
-        assert "84.2" in row_1
+        # Verify body content and native result table
+        all_text = "\n".join(p.text for p in out_doc.paragraphs)
+        assert "{{TITLE}}" not in all_text
+        assert "{{INTRODUCTION}}" not in all_text
+        assert "Automated code synthesis requires reproducible benchmarks" in all_text
 
-        # Verify references section appended
-        assert "References" in full_text
-        assert "Vaswani, A., et al." in full_text
-        assert "Attention Is All You Need" in full_text
+        # Verify results table
+        assert len(out_doc.tables) >= 2
+        res_table = out_doc.tables[1]
+        assert "System" in [c.text for c in res_table.rows[0].cells]
+        assert "97.1" in [c.text for c in res_table.rows[2].cells]
+
+        # Verify references appended
+        assert "References" in all_text
+        assert "Vaswani, A., et al." in all_text

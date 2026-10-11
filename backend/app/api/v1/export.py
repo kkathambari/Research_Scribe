@@ -92,8 +92,17 @@ def export_manuscript(payload: ExportRequest, db: Session = Depends(get_db)):
         template_path = template_obj.storage_reference
         template_applied = True
 
+    abstract_sec = next((s for s in manuscript.sections if s.section_type == "abstract"), None)
+    abstract_text = getattr(manuscript, "abstract", None) or (abstract_sec.content if abstract_sec else "")
+    target_journal = getattr(manuscript, "target_journal", None) or (manuscript.journal_profile.journal_name if manuscript.journal_profile else (manuscript.project.target_publication if manuscript.project else ""))
+
     exported_file_path = exporter.export_manuscript(
-        manuscript={"id": manuscript.id, "title": manuscript.title},
+        manuscript={
+            "id": manuscript.id,
+            "title": manuscript.title,
+            "abstract": abstract_text,
+            "target_journal": target_journal
+        },
         sections=sections_list,
         sources=sources_list,
         claims=claims_list,

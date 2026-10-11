@@ -92,14 +92,16 @@ class ManuscriptExporterService:
             sec_by_type = {s.get("section_type", "").lower(): s for s in sections}
             replaced_types = set()
 
-            for p in doc.paragraphs:
-                # Direct in-line placeholder replacements
-                if "{{TITLE}}" in p.text or "{{title}}" in p.text:
+            def _sub_placeholders(p):
+                if not p.text:
+                    return
+                p_text_lower = p.text.lower()
+                if "{{title}}" in p_text_lower:
                     p.text = re.sub(r'\{\{TITLE\}\}', title, p.text, flags=re.IGNORECASE)
                 elif p.text.strip().lower() in ["[paper title]", "title of paper"]:
                     p.text = title
 
-                if "{{ABSTRACT}}" in p.text or "{{abstract}}" in p.text:
+                if "{{abstract}}" in p_text_lower:
                     abs_text = sec_by_type.get("abstract", {}).get("content") or abstract or "This manuscript presents an evidence-grounded investigation."
                     p.text = re.sub(r'\{\{ABSTRACT\}\}', abs_text, p.text, flags=re.IGNORECASE)
                     replaced_types.add("abstract")
@@ -108,19 +110,39 @@ class ManuscriptExporterService:
                     p.text = abs_text
                     replaced_types.add("abstract")
 
-                if "{{AUTHORS}}" in p.text or "{{authors}}" in p.text:
+                if "{{authors}}" in p_text_lower:
                     p.text = re.sub(r'\{\{AUTHORS\}\}', "Research Author(s)", p.text, flags=re.IGNORECASE)
                 elif p.text.strip().lower() in ["[author]", "[authors]"]:
                     p.text = "Research Author(s)"
 
-                if "{{INTRODUCTION}}" in p.text or "{{introduction}}" in p.text or p.text.strip().lower() == "[introduction]":
+                if "{{introduction}}" in p_text_lower or p.text.strip().lower() == "[introduction]":
                     intro_sec = sec_by_type.get("introduction")
                     if intro_sec:
-                        p.text = intro_sec.get("content", "")
+                        p.text = re.sub(r'\{\{INTRODUCTION\}\}', intro_sec.get("content", ""), p.text, flags=re.IGNORECASE) if "{{introduction}}" in p_text_lower else intro_sec.get("content", "")
                         replaced_types.add("introduction")
 
-                if "{{KEYWORDS}}" in p.text or "{{keywords}}" in p.text or p.text.strip().lower() == "[keywords]":
-                    p.text = "Keywords: research automation; repository analysis; evidence provenance; reproducible science"
+                if "{{keywords}}" in p_text_lower or p.text.strip().lower() == "[keywords]":
+                    p.text = re.sub(r'\{\{KEYWORDS\}\}', "Keywords: research automation; repository analysis; evidence provenance; reproducible science", p.text, flags=re.IGNORECASE) if "{{keywords}}" in p_text_lower else "Keywords: research automation; repository analysis; evidence provenance; reproducible science"
+
+            # 1. Main body paragraphs
+            for p in doc.paragraphs:
+                _sub_placeholders(p)
+
+            # 2. Table cells (for journal templates with metadata / header tables)
+            for table in doc.tables:
+                for row in table.rows:
+                    for cell in row.cells:
+                        for p in cell.paragraphs:
+                            _sub_placeholders(p)
+
+            # 3. Headers and footers across sections
+            for s in doc.sections:
+                if s.header:
+                    for p in s.header.paragraphs:
+                        _sub_placeholders(p)
+                if s.footer:
+                    for p in s.footer.paragraphs:
+                        _sub_placeholders(p)
 
             # Append remaining sections using template styles
             sorted_sections = sorted(sections, key=lambda s: s.get("order", 0))

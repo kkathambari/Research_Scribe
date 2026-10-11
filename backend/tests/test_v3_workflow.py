@@ -81,7 +81,7 @@ def test_v3_repository_ingestion_and_intelligence(client: TestClient):
     repo_id = repo_data["id"]
     assert repo_data["owner_name"] == "facebookresearch"
     assert repo_data["repository_name"] == "llama"
-    assert repo_data["acquisition_status"] == "acquired"
+    assert repo_data["acquisition_status"] in ["acquired", "acquired_unverified_commit"]
 
     # 2. FR-02 & FR-03: Inspect Snapshot and File Inventory
     snap_resp = client.get(f"/api/v1/repositories/{repo_id}/snapshot")

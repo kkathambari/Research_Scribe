@@ -99,6 +99,27 @@ class WorkflowOrchestrator:
 
         return statuses
 
+    def get_downstream_checkpoints(self, checkpoint_name: str) -> List[str]:
+        """Finds all transitive downstream checkpoints that depend on checkpoint_name."""
+        graph = {}
+        for code, _, _, prereqs in CHECKPOINTS_CONFIG:
+            for p in prereqs:
+                if p not in graph:
+                    graph[p] = []
+                graph[p].append(code)
+
+        downstream = []
+        queue = list(graph.get(checkpoint_name, []))
+        visited = set(queue)
+        while queue:
+            curr = queue.pop(0)
+            downstream.append(curr)
+            for nxt in graph.get(curr, []):
+                if nxt not in visited:
+                    visited.add(nxt)
+                    queue.append(nxt)
+        return downstream
+
     def record_review_action(
         self,
         db: Session,
@@ -106,6 +127,24 @@ class WorkflowOrchestrator:
         submission: ReviewActionSubmit
     ) -> ReviewAction:
         """FR-14 & FR-27: Records an explicit researcher approval or correction with prerequisite gating."""
+        # Invalidate dependent approvals if an upstream checkpoint is edited, rejected, or modified
+        if submission.action_type in ["rejected", "modified", "corrected", "unapproved", "reset", "edited"]:
+            downstream = self.get_downstream_checkpoints(submission.checkpoint_name)
+            if downstream:
+                db.query(ReviewAction).filter(
+                    ReviewAction.project_id == project_id,
+                    ReviewAction.checkpoint_name.in_(downstream),
+                    ReviewAction.action_type == "approved"
+                ).delete(synchronize_session=False)
+
+            # Invalidate any existing approval for this checkpoint as well
+            db.query(ReviewAction).filter(
+                ReviewAction.project_id == project_id,
+                ReviewAction.checkpoint_name == submission.checkpoint_name,
+                ReviewAction.action_type == "approved"
+            ).delete(synchronize_session=False)
+            db.commit()
+
         # Enforce Guided checkpoint prerequisite gating (FR-14)
         if submission.action_type == "approved":
             config_dict = {code: prereqs for code, _, _, prereqs in CHECKPOINTS_CONFIG}

@@ -118,6 +118,51 @@ class RepositoryAnalyzer:
 
         return None
 
+    def verify_commit_sha_exists(
+        self,
+        repository_url: str,
+        owner: str,
+        repo_name: str,
+        commit_sha: str
+    ) -> bool:
+        """Verifies that a specified commit SHA actually exists in the local or remote Git repository."""
+        if not commit_sha or len(commit_sha) < 7:
+            return False
+
+        # 1. Local disk path
+        if Path(repository_url).exists():
+            try:
+                proc = subprocess.run(
+                    ["git", "cat-file", "-e", f"{commit_sha}^{{commit}}"],
+                    cwd=str(Path(repository_url).resolve()),
+                    capture_output=True,
+                    timeout=5
+                )
+                if proc.returncode == 0:
+                    return True
+            except Exception:
+                pass
+
+        # 2. Remote GitHub repository
+        try:
+            headers = {"User-Agent": "ResearchScribe/3.0"}
+            github_token = os.environ.get("GITHUB_TOKEN")
+            if github_token:
+                headers["Authorization"] = f"Bearer {github_token}"
+            with httpx.Client(timeout=8.0) as client:
+                resp = client.get(
+                    f"https://api.github.com/repos/{owner}/{repo_name}/commits/{commit_sha}",
+                    headers=headers
+                )
+                if resp.status_code == 200:
+                    return True
+                elif resp.status_code == 404:
+                    return False
+        except Exception as e:
+            logger.debug(f"GitHub commits SHA verification failed for {owner}/{repo_name}@{commit_sha}: {e}")
+
+        return False
+
     def acquire_repository(
         self,
         db: Session,
@@ -130,23 +175,32 @@ class RepositoryAnalyzer:
         """FR-01 & FR-02: Acquires and records an authorized repository reference grounded in a real commit."""
         owner, repo_name = self.parse_github_url(repository_url)
 
-        # Resolve real commit SHA
+        # Resolve or independently verify real commit SHA
         commit_sha = resolved_commit_sha
-        if not commit_sha:
-            commit_sha = self.resolve_remote_commit_sha(repository_url, owner, repo_name, branch_or_tag)
-
-        # If commit SHA could not be verified and repository is not reachable
-        if not commit_sha:
-            if not allow_unverified_commit:
-                raise ValueError(
-                    f"Repository file acquisition failed: Commit SHA could not be verified for repository '{repository_url}' on revision '{branch_or_tag}'. "
-                    f"Genuine Git commit SHA is required to guarantee research provenance under SRS v3.0 scientific integrity requirements."
-                )
-            # Explicit unverified marker when researcher explicitly opts in
-            commit_sha = f"UNVERIFIED_{hashlib.sha1(f'{owner}/{repo_name}@{branch_or_tag}'.encode()).hexdigest()}"
-            acq_status = "acquired_unverified_commit"
+        if commit_sha:
+            # Caller supplied a commit SHA: independently verify it exists in the designated repository
+            is_valid = self.verify_commit_sha_exists(repository_url, owner, repo_name, commit_sha)
+            if not is_valid:
+                if not allow_unverified_commit:
+                    raise ValueError(
+                        f"Repository file acquisition failed: Supplied commit SHA '{commit_sha}' could not be verified in repository '{repository_url}'. "
+                        f"Genuine Git commit SHA is required to guarantee research provenance."
+                    )
+                acq_status = "acquired_unverified_commit"
+            else:
+                acq_status = "acquired"
         else:
-            acq_status = "acquired"
+            commit_sha = self.resolve_remote_commit_sha(repository_url, owner, repo_name, branch_or_tag)
+            if not commit_sha:
+                if not allow_unverified_commit:
+                    raise ValueError(
+                        f"Repository file acquisition failed: Commit SHA could not be verified for repository '{repository_url}' on revision '{branch_or_tag}'. "
+                        f"Genuine Git commit SHA is required to guarantee research provenance under SRS v3.0 scientific integrity requirements."
+                    )
+                commit_sha = f"UNVERIFIED_{hashlib.sha1(f'{owner}/{repo_name}@{branch_or_tag}'.encode()).hexdigest()}"
+                acq_status = "acquired_unverified_commit"
+            else:
+                acq_status = "acquired"
 
         repo = db.query(Repository).filter(
             Repository.project_id == project_id,
@@ -192,6 +246,37 @@ class RepositoryAnalyzer:
         # A) Check if local path exists
         repo_path = Path(repository.repository_url)
         if repo_path.is_dir():
+            # If local git repository, read clean snapshot from the exact commit
+            local_sha = repository.resolved_commit_sha
+            if (repo_path / ".git").exists() and local_sha and not local_sha.startswith("UNVERIFIED"):
+                verify_proc = subprocess.run(
+                    ["git", "cat-file", "-e", f"{local_sha}^{{commit}}"],
+                    cwd=str(repo_path), capture_output=True, text=True
+                )
+                if verify_proc.returncode != 0:
+                    raise ValueError(
+                        f"Repository file acquisition failed: Commit SHA '{local_sha}' does not exist in local repository at '{repo_path}'."
+                    )
+                try:
+                    with tempfile.TemporaryDirectory() as clean_tmp:
+                        archive_proc = subprocess.Popen(
+                            ["git", "archive", local_sha],
+                            cwd=str(repo_path),
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE
+                        )
+                        tar_proc = subprocess.run(
+                            ["tar", "-x", "-C", clean_tmp],
+                            stdin=archive_proc.stdout,
+                            capture_output=True
+                        )
+                        archive_proc.wait()
+                        if archive_proc.returncode == 0 and tar_proc.returncode == 0:
+                            files = self._scan_directory_files(Path(clean_tmp), max_files, max_file_size)
+                            if files:
+                                return files
+                except Exception as e:
+                    logger.debug(f"git archive extraction failed for {repo_path}: {e}")
             return self._scan_directory_files(repo_path, max_files, max_file_size)
 
         # B) Try git clone into temporary directory and checkout exact commit SHA
@@ -205,6 +290,19 @@ class RepositoryAnalyzer:
                             ["git", "checkout", repository.resolved_commit_sha],
                             cwd=tmp_dir, capture_output=True, text=True, timeout=10
                         )
+                        if co_proc.returncode != 0:
+                            raise ValueError(
+                                f"Repository file acquisition failed: Could not checkout resolved commit SHA '{repository.resolved_commit_sha}' on clone: {co_proc.stderr.strip()}"
+                            )
+                        # Verify checked out HEAD matches expected commit SHA exactly
+                        head_sha = subprocess.check_output(
+                            ["git", "rev-parse", "HEAD"],
+                            cwd=tmp_dir, text=True, stderr=subprocess.DEVNULL
+                        ).strip()
+                        if head_sha != repository.resolved_commit_sha:
+                            raise ValueError(
+                                f"Repository file acquisition failed: Checked-out HEAD SHA '{head_sha}' does not match resolved SHA '{repository.resolved_commit_sha}'."
+                            )
                     files = self._scan_directory_files(Path(tmp_dir), max_files, max_file_size)
                     if files:
                         return files
@@ -445,8 +543,10 @@ class RepositoryAnalyzer:
                             ctype = "model" if is_model else ("evaluation" if is_eval else ("pipeline" if is_pipeline else "module"))
                             dep_str = ", ".join(all_bases) if all_bases else "built-in"
 
+                            col_off = getattr(node, "col_offset", 0)
+                            c_key = f"{snapshot.id}_{path}_{node.name}_{node.lineno}_{col_off}".encode()
                             comp = CodeComponent(
-                                id=f"comp_{hashlib.md5(f'{snapshot.id}_{path}_{node.name}'.encode()).hexdigest()[:10]}",
+                                id=f"comp_{hashlib.md5(c_key).hexdigest()[:16]}",
                                 snapshot_id=snapshot.id,
                                 name=node.name,
                                 component_type=ctype,
@@ -469,8 +569,10 @@ class RepositoryAnalyzer:
                                 docstring = ast.get_docstring(node) or f"Function definition for {node.name}."
                                 ctype = "training_pipeline" if "train" in fname_lower else ("evaluation" if "eval" in fname_lower or "metric" in fname_lower else "pipeline")
                                 args = [a.arg for a in node.args.args]
+                                col_off = getattr(node, "col_offset", 0)
+                                c_key = f"{snapshot.id}_{path}_{node.name}_{node.lineno}_{col_off}".encode()
                                 comp = CodeComponent(
-                                    id=f"comp_{hashlib.md5(f'{snapshot.id}_{path}_{node.name}'.encode()).hexdigest()[:10]}",
+                                    id=f"comp_{hashlib.md5(c_key).hexdigest()[:16]}",
                                     snapshot_id=snapshot.id,
                                     name=node.name,
                                     component_type=ctype,

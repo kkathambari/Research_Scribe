@@ -44,17 +44,20 @@ def create_project(payload: ProjectCreate, db: Session = Depends(get_db)):
     # If GitHub repository URL provided, ingest it (FR-01, FR-02)
     if payload.repository_url:
         try:
+            allow_unverified = bool(payload.file_manifest)
             repo = repository_analyzer.acquire_repository(
                 db=db,
                 project_id=project_id,
                 repository_url=payload.repository_url,
                 branch_or_tag=payload.branch_or_tag or "main",
-                resolved_commit_sha=payload.resolved_commit_sha
+                resolved_commit_sha=payload.resolved_commit_sha,
+                allow_unverified_commit=allow_unverified
             )
             snapshot = repository_analyzer.create_snapshot_from_manifest(
                 db=db,
                 repository=repo,
-                file_manifest=payload.file_manifest
+                file_manifest=payload.file_manifest,
+                allow_unverified_commit=allow_unverified
             )
             repo_id = repo.id
             snapshot_id = snapshot.id
