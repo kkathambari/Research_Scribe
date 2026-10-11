@@ -330,6 +330,37 @@ class CitationVerificationService:
         if claim_has_contradiction and ev_has_positive:
             return best_ev, 0.85, "contradicted", "Discrepancy detected: Claim asserts negative/inferior finding while source passage reports positive improvement."
 
+        # Numerical fact-checking: claims asserting specific numbers must have numerical corroboration
+        claim_numbers = set(re.findall(r'\b\d+(?:\.\d+)?%?', claim_text))
+        # Exclude citation years (e.g. 2017, 2024) and pure single digit section numbers
+        substantive_numbers = {
+            n for n in claim_numbers 
+            if not (n.isdigit() and len(n) == 4 and 1900 <= int(n) <= 2030)
+            and not (n.isdigit() and int(n) <= 10 and f"[{n}]" in claim_text)
+        }
+        if substantive_numbers and best_ev:
+            ev_numbers = set(re.findall(r'\b\d+(?:\.\d+)?%?', best_ev["passage_text"]))
+            missing_numbers = substantive_numbers - ev_numbers
+            if missing_numbers:
+                return (
+                    best_ev,
+                    min(0.35, round(max_overlap_score, 2)),
+                    "unverified",
+                    f"Numerical discrepancy: The claim asserts numerical metrics ({', '.join(sorted(missing_numbers))}) that are not corroborated in the cited evidence passage."
+                )
+
+        # Comparative claim check: claims of superiority require comparative evidence
+        superiority_cues = ["outperforms", "superior to", "higher accuracy than", "better performance than", "surpasses"]
+        if any(cue in claim_clean for cue in superiority_cues) and best_ev:
+            ev_has_comp = any(c in best_ev["passage_text"].lower() for c in ["outperform", "superior", "baseline", "compared to", "exceed", "higher"])
+            if not ev_has_comp:
+                return (
+                    best_ev,
+                    min(0.40, round(max_overlap_score, 2)),
+                    "partially_supported",
+                    "Comparative claim requires caution: The source describes the method but does not contain comparative benchmark data supporting superiority."
+                )
+
         # Assign status based on overlap threshold
         if max_overlap_score >= 0.45:
             page_info = f" (Page {best_ev.get('page_number', 1)})" if best_ev and best_ev.get('page_number') else ""

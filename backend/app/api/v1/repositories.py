@@ -51,13 +51,15 @@ def submit_repository(
             project_id=project_id,
             repository_url=data.repository_url,
             branch_or_tag=data.branch_or_tag or "main",
-            resolved_commit_sha=data.resolved_commit_sha
+            resolved_commit_sha=data.resolved_commit_sha,
+            allow_unverified_commit=data.allow_unverified_commit
         )
         # Automatically build snapshot from codebase manifest or acquire files
         snapshot = repository_analyzer.create_snapshot_from_manifest(
             db,
             repo,
-            file_manifest=data.file_manifest
+            file_manifest=data.file_manifest,
+            allow_unverified_commit=data.allow_unverified_commit
         )
         return RepositoryResponse.from_orm(repo)
     except Exception as e:

@@ -85,17 +85,38 @@ class ManuscriptExporterService:
             doc = docx.Document()
 
         if is_template_loaded:
-            # Replace template placeholders if found
+            # Map of placeholders to section contents
+            sec_by_type = {s.get("section_type", "").lower(): s for s in sections}
+            replaced_types = set()
+
             for p in doc.paragraphs:
                 p_text_lower = p.text.lower()
-                if "{{title}}" in p_text_lower or "[paper title]" in p_text_lower or "title of paper" in p_text_lower:
+                # Title placeholder
+                if any(tag in p_text_lower for tag in ["{{title}}", "[paper title]", "title of paper"]):
                     p.text = title
                     if "Title" in doc.styles:
                         p.style = doc.styles["Title"]
-            
-            # Append sections using template styles
+                # Abstract placeholder
+                elif any(tag in p_text_lower for tag in ["{{abstract}}", "[abstract]"]):
+                    abs_sec = sec_by_type.get("abstract")
+                    if abs_sec:
+                        p.text = abs_sec.get("content", "")
+                        replaced_types.add("abstract")
+                # Introduction placeholder
+                elif any(tag in p_text_lower for tag in ["{{introduction}}", "[introduction]"]):
+                    intro_sec = sec_by_type.get("introduction")
+                    if intro_sec:
+                        p.text = intro_sec.get("content", "")
+                        replaced_types.add("introduction")
+                # Keywords placeholder
+                elif any(tag in p_text_lower for tag in ["{{keywords}}", "[keywords]"]):
+                    p.text = "Keywords: research automation; repository analysis; evidence provenance; reproducible science"
+
+            # Append remaining sections using template styles
             sorted_sections = sorted(sections, key=lambda s: s.get("order", 0))
             for sec in sorted_sections:
+                if sec.get("section_type", "").lower() in replaced_types:
+                    continue
                 sec_title = sec.get("title", "Section")
                 h = doc.add_paragraph()
                 if "Heading 1" in doc.styles:
@@ -103,15 +124,7 @@ class ManuscriptExporterService:
                 run = h.add_run(sec_title)
                 run.bold = True
 
-                content = sec.get("content", "")
-                for para_text in content.split("\n\n"):
-                    para_clean = para_text.strip()
-                    if not para_clean:
-                        continue
-                    p = doc.add_paragraph()
-                    if "Normal" in doc.styles:
-                        p.style = doc.styles["Normal"]
-                    p.add_run(para_clean)
+                self._render_content_block(doc, sec.get("content", ""), normal_style="Normal")
 
         else:
             # Standard professional academic layout
@@ -140,20 +153,7 @@ class ManuscriptExporterService:
                 h.paragraph_format.space_before = Pt(14)
                 h.paragraph_format.space_after = Pt(6)
 
-                content = sec.get("content", "")
-                paragraphs = content.split("\n\n")
-                for para_text in paragraphs:
-                    para_clean = para_text.strip()
-                    if not para_clean:
-                        continue
-                    if para_clean.startswith("### "):
-                        h3 = doc.add_heading(para_clean.replace("### ", ""), level=2)
-                        h3.paragraph_format.space_before = Pt(8)
-                        h3.paragraph_format.space_after = Pt(4)
-                    else:
-                        p = doc.add_paragraph(para_clean)
-                        p.paragraph_format.line_spacing = 1.15
-                        p.paragraph_format.space_after = Pt(6)
+                self._render_content_block(doc, sec.get("content", ""))
 
         # Bibliography section if sources present
         if sources:
@@ -205,6 +205,59 @@ class ManuscriptExporterService:
                 row_cells[3].text = claim.get("explanation", "") or "Corroborated by repository evidence."
 
         doc.save(str(out_path))
+
+    def _render_content_block(self, doc, content: str, normal_style: str = "Normal"):
+        """Renders prose, subsection headers, and markdown tables into docx elements."""
+        import re
+        for block in content.split("\n\n"):
+            block_clean = block.strip()
+            if not block_clean:
+                continue
+
+            # Check if block is a markdown table
+            lines = [l.strip() for l in block_clean.splitlines() if l.strip()]
+            if len(lines) >= 2 and all(l.startswith("|") and l.endswith("|") for l in lines):
+                rows_data = []
+                for line in lines:
+                    if re.match(r'^\|[\s\-:|]+\|$', line):  # table separator row
+                        continue
+                    cells = [c.strip() for c in line.strip("|").split("|")]
+                    rows_data.append(cells)
+
+                if rows_data:
+                    num_cols = max(len(r) for r in rows_data)
+                    tbl = doc.add_table(rows=len(rows_data), cols=num_cols)
+                    tbl.style = 'Table Grid'
+                    for r_idx, r_data in enumerate(rows_data):
+                        for c_idx, val in enumerate(r_data):
+                            if c_idx < num_cols:
+                                cell = tbl.rows[r_idx].cells[c_idx]
+                                cell.text = val
+                                if r_idx == 0:
+                                    for p in cell.paragraphs:
+                                        for run in p.runs:
+                                            run.bold = True
+                    doc.add_paragraph()
+                    continue
+
+            # Regular paragraph or subsections
+            if block_clean.startswith("### "):
+                h = doc.add_paragraph()
+                if "Heading 2" in doc.styles:
+                    h.style = doc.styles["Heading 2"]
+                run = h.add_run(block_clean.replace("### ", ""))
+                run.bold = True
+            elif block_clean.startswith("## "):
+                h = doc.add_paragraph()
+                if "Heading 1" in doc.styles:
+                    h.style = doc.styles["Heading 1"]
+                run = h.add_run(block_clean.replace("## ", ""))
+                run.bold = True
+            else:
+                p = doc.add_paragraph()
+                if normal_style in doc.styles:
+                    p.style = doc.styles[normal_style]
+                p.add_run(block_clean)
 
     def _generate_markdown(
         self,

@@ -110,3 +110,103 @@ def test_audit_compliance_not_verifiable_page_limit(client: TestClient):
     assert page_check is not None
     assert page_check["status"] == "not_verifiable"
     assert report["not_verifiable_count"] >= 1
+
+def test_audit_commit_provenance_rejection(client: TestClient):
+    """
+    Audit 2 Critical A: Verifies that unreachable repository fails without
+    producing an unverified commit fallback unless explicitly permitted.
+    """
+    resp = client.post("/api/v1/repositories/submit", json={
+        "repository_url": "https://github.com/nonexistent_org/nonexistent_repo",
+        "branch_or_tag": "main",
+        "title": "Unreachable Repo Test",
+        "allow_unverified_commit": False
+    })
+    assert resp.status_code == 400
+    assert "commit sha could not be verified" in resp.json()["detail"].lower()
+
+def test_audit_guided_mode_checkpoint_gating(client: TestClient):
+    """
+    Audit 2 Medium: Verifies that unapproved checkpoints block dependent operations
+    and cannot be approved until prerequisites are met.
+    """
+    proj_resp = client.post("/api/v1/projects", json={
+        "title": "Guided Gating Test Project",
+        "topic": "Checkpoint prerequisite gating",
+        "generation_mode": "guided"
+    })
+    assert proj_resp.status_code == 200
+    proj_id = proj_resp.json()["id"]
+
+    # Attempt to approve 'methodology' checkpoint before 'inventory' is approved
+    rev_resp = client.post(f"/api/v1/workflow/review-action/{proj_id}", json={
+        "checkpoint_name": "methodology",
+        "target_type": "checkpoint",
+        "target_id": "methodology",
+        "action_type": "approved"
+    })
+    assert rev_resp.status_code == 400
+    assert "prerequisite checkpoint" in rev_resp.json()["detail"].lower()
+
+    # Now approve 'inventory' first
+    rev_inv = client.post(f"/api/v1/workflow/review-action/{proj_id}", json={
+        "checkpoint_name": "inventory",
+        "target_type": "checkpoint",
+        "target_id": "inventory",
+        "action_type": "approved"
+    })
+    assert rev_inv.status_code == 200
+    assert rev_inv.json()["status"] == "success"
+
+    # Now approve 'methodology' - should succeed
+    rev_meth = client.post(f"/api/v1/workflow/review-action/{proj_id}", json={
+        "checkpoint_name": "methodology",
+        "target_type": "checkpoint",
+        "target_id": "methodology",
+        "action_type": "approved"
+    })
+    assert rev_meth.status_code == 200
+    assert rev_meth.json()["status"] == "success"
+
+def test_audit_numerical_claim_verification():
+    """
+    Audit 2 High: Verifies that numerical claims whose values do not appear
+    in the cited evidence passage are flagged as unverified.
+    """
+    from app.services.verification_engine import verification_engine
+
+    claim_with_number = "The proposed transformer achieves 96.8% accuracy on the test set [1]."
+    source = {"id": "src_1", "citation_key": "test2024", "title": "Test Paper", "abstract": "We evaluate transformer architectures."}
+    evidences = [{
+        "id": "ev_1",
+        "source_id": "src_1",
+        "passage_text": "We evaluate transformer architectures across test sets, observing solid accuracy and fast convergence.",
+        "page_number": 3
+    }]
+
+    best_ev, score, status, expl = verification_engine._evaluate_evidence_support(claim_with_number, source, evidences)
+    assert status == "unverified"
+    assert "numerical discrepancy" in expl.lower()
+    assert "96.8%" in expl
+
+def test_audit_journal_guideline_verification_check(client: TestClient):
+    """
+    Audit 2 High: Verifies that default publisher profiles generate a guideline_verification
+    warning so the researcher is aware that venue-specific rules have not been confirmed.
+    """
+    proj_resp = client.post("/api/v1/projects", json={
+        "title": "Journal Default Warning Test",
+        "topic": "Journal guidelines audit",
+        "target_publication": "IEEE Transactions"
+    })
+    assert proj_resp.status_code == 200
+    manuscript_id = proj_resp.json()["manuscript_id"]
+
+    comp_resp = client.get(f"/api/v1/journals/validate/{manuscript_id}")
+    assert comp_resp.status_code == 200
+    report = comp_resp.json()
+
+    guide_check = next((c for c in report["checks"] if c["check_type"] == "guideline_verification"), None)
+    assert guide_check is not None
+    assert guide_check["status"] == "warning"
+    assert "unverified publisher defaults" in guide_check["explanation"].lower()

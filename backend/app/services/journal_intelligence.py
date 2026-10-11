@@ -151,7 +151,7 @@ class JournalIntelligence:
             table_requirements="Tables must be numbered sequentially with titles positioned above.",
             declaration_requirements=json.dumps(defaults.get("declaration_requirements", [])),
             layout_requirements=defaults.get("layout_requirements", "Standard academic layout"),
-            verification_status="default_baseline",
+            verification_status="unverified_default",
             profile_version=1,
             retrieved_at=now_utc
         )
@@ -185,7 +185,7 @@ class JournalIntelligence:
                 source_type="publisher_guidelines",
                 source_location="Official Author Guide",
                 confidence=1.0,
-                verification_status="default_baseline",
+                verification_status="unverified_default",
                 user_approval_status="unreviewed"
             )
             db.add(req)
@@ -448,6 +448,36 @@ class JournalIntelligence:
         )
         db.add(c)
         checks.append(ComplianceCheckResponse.model_validate(c))
+
+        # 7. Guideline verification check (SRS FR-21: distinguish default profile from confirmed guidelines)
+        if profile.verification_status == "unverified_default":
+            status_guide = "warning"
+            obs_guide = "Unverified default publisher baseline"
+            exp_guide = (
+                f"Journal profile '{profile.journal_name}' is initialized from unverified publisher defaults. "
+                f"Different venues within {profile.publisher} enforce distinct author guidelines. "
+                f"Official author instructions at {profile.official_guidelines_url} have not been confirmed by the researcher."
+            )
+            corr_guide = f"Review official guidelines at {profile.official_guidelines_url} and approve or adjust requirements via Guided Mode."
+        else:
+            status_guide = "passed"
+            obs_guide = f"Verified ({profile.verification_status})"
+            exp_guide = f"Author guidelines for {profile.journal_name} have been confirmed."
+            corr_guide = None
+
+        c_guide = ComplianceCheck(
+            id=f"chk_guide_{manuscript.id}",
+            manuscript_id=manuscript.id,
+            check_type="guideline_verification",
+            status=status_guide,
+            observed_value=obs_guide,
+            expected_value=f"Verified instructions from {profile.official_guidelines_url}",
+            explanation=exp_guide,
+            suggested_correction=corr_guide,
+            checked_at=now_utc
+        )
+        db.add(c_guide)
+        checks.append(ComplianceCheckResponse.model_validate(c_guide))
 
         db.commit()
 

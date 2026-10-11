@@ -117,21 +117,36 @@ class ScholarlyRetrievalService:
             except Exception as e:
                 logger.debug(f"Crossref query failed: {e}")
 
-        # Critical 3 Fix: If APIs were unreachable or returned no genuine publications,
+        # Critical Integrity: If APIs were unreachable or returned no genuine publications,
         # never fabricate imaginary authors or papers.
         if not results:
-            q_lower = query.lower()
-            matched_fixtures = [
-                f for f in self.TEST_FIXTURE_ARCHIVE
-                if any(w in f.title.lower() or w in (f.abstract or "").lower() for w in q_lower.split() if len(w) > 3)
-            ]
-            if matched_fixtures and (allow_test_fixtures or not apis_reached):
-                return ScholarlySearchResponse(
-                    query=query,
-                    total=len(matched_fixtures),
-                    results=matched_fixtures[:limit],
-                    retrieval_status="verified_archive_fallback"
-                )
+            if allow_test_fixtures:
+                q_lower = query.lower()
+                matched_fixtures = [
+                    f for f in self.TEST_FIXTURE_ARCHIVE
+                    if any(w in f.title.lower() or w in (f.abstract or "").lower() for w in q_lower.split() if len(w) > 3)
+                ]
+                if matched_fixtures:
+                    labeled_fixtures = []
+                    for fix in matched_fixtures[:limit]:
+                        labeled_fixtures.append(ScholarlySearchResultItem(
+                            title=f"[Archive Fallback] {fix.title}",
+                            authors=fix.authors,
+                            year=fix.year,
+                            venue=f"{fix.venue} (Offline Archive)",
+                            doi=fix.doi,
+                            citation_key=fix.citation_key,
+                            abstract=fix.abstract,
+                            citation_count=fix.citation_count,
+                            access_status=fix.access_status,
+                            url=fix.url
+                        ))
+                    return ScholarlySearchResponse(
+                        query=query,
+                        total=len(labeled_fixtures),
+                        results=labeled_fixtures,
+                        retrieval_status="verified_archive_fallback"
+                    )
 
             status = "no_results_found" if apis_reached else "retrieval_unavailable"
             return ScholarlySearchResponse(

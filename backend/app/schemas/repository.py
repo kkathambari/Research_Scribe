@@ -12,6 +12,7 @@ class RepositorySubmitRequest(BaseModel):
     citation_style: Optional[str] = Field("IEEE", description="Citation style")
     generation_mode: Optional[str] = Field("automatic", description="automatic or guided")
     resolved_commit_sha: Optional[str] = Field(None, description="Explicit commit SHA")
+    allow_unverified_commit: bool = Field(False, description="Explicitly allow unverified fallback commit hash for offline environments")
     file_manifest: Optional[List[Dict[str, Any]]] = Field(None, description="Optional explicit file manifest (for test fixtures or custom snapshots)")
 
 class RepositoryFileResponse(BaseModel):

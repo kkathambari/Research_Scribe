@@ -28,13 +28,29 @@ def record_review_action(
     db: Session = Depends(get_db)
 ):
     """FR-14 & FR-27: Records an explicit researcher approval or correction at a review checkpoint."""
-    action = workflow_orchestrator.record_review_action(db, project_id, action_data)
-    return {
-        "status": "success",
-        "action_id": action.id,
-        "checkpoint": action.checkpoint_name,
-        "action": action.action_type
-    }
+    try:
+        action = workflow_orchestrator.record_review_action(db, project_id, action_data)
+        return {
+            "status": "success",
+            "action_id": action.id,
+            "checkpoint": action.checkpoint_name,
+            "action": action.action_type
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@router.get("/check-gate/{project_id}/{checkpoint_code}")
+def check_checkpoint_gate(
+    project_id: str,
+    checkpoint_code: str,
+    db: Session = Depends(get_db)
+):
+    """Checks whether the specified checkpoint is accessible or blocked by unmet prerequisites."""
+    try:
+        workflow_orchestrator.assert_checkpoint_accessible(db, project_id, checkpoint_code)
+        return {"status": "unblocked", "checkpoint": checkpoint_code}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 @router.get("/research-gaps/{project_id}", response_model=List[ResearchGapProposal])
 def get_research_gaps_and_contributions(

@@ -78,7 +78,7 @@ class RepositoryAnalyzer:
                 if out.strip():
                     return out.strip()[:12]
             except Exception:
-                return hashlib.sha1(str(Path(repository_url).resolve()).encode()).hexdigest()[:12]
+                return None
 
         # 2. Try git ls-remote if git is installed
         try:
@@ -124,7 +124,8 @@ class RepositoryAnalyzer:
         project_id: str,
         repository_url: str,
         branch_or_tag: str = "main",
-        resolved_commit_sha: Optional[str] = None
+        resolved_commit_sha: Optional[str] = None,
+        allow_unverified_commit: bool = False
     ) -> Repository:
         """FR-01 & FR-02: Acquires and records an authorized repository reference grounded in a real commit."""
         owner, repo_name = self.parse_github_url(repository_url)
@@ -136,8 +137,13 @@ class RepositoryAnalyzer:
 
         # If commit SHA could not be verified and repository is not reachable
         if not commit_sha:
-            # Deterministic fallback identifier for offline test environments, with explicit provenance warning
-            commit_sha = hashlib.sha1(f"{owner}/{repo_name}@{branch_or_tag}".encode()).hexdigest()[:12]
+            if not allow_unverified_commit:
+                raise ValueError(
+                    f"Repository file acquisition failed: Commit SHA could not be verified for repository '{repository_url}' on revision '{branch_or_tag}'. "
+                    f"Genuine Git commit SHA is required to guarantee research provenance under SRS v3.0 scientific integrity requirements."
+                )
+            # Explicit unverified marker when researcher explicitly opts in
+            commit_sha = f"UNVERIFIED_{hashlib.sha1(f'{owner}/{repo_name}@{branch_or_tag}'.encode()).hexdigest()[:8]}"
             acq_status = "acquired_unverified_commit"
         else:
             acq_status = "acquired"
@@ -293,12 +299,19 @@ class RepositoryAnalyzer:
         self,
         db: Session,
         repository: Repository,
-        file_manifest: Optional[List[Dict[str, Any]]] = None
+        file_manifest: Optional[List[Dict[str, Any]]] = None,
+        allow_unverified_commit: bool = False
     ) -> RepositorySnapshot:
         """
         FR-02 & FR-03: Builds immutable snapshot inventory from the actual repository files
         or explicitly provided manifest (used for deterministic test fixtures).
         """
+        if repository.acquisition_status == "acquired_unverified_commit" and not allow_unverified_commit:
+            raise ValueError(
+                f"Cannot create repository snapshot: repository commit provenance '{repository.resolved_commit_sha}' is unverified. "
+                f"Genuine Git commit verification is required under SRS v3.0 scientific integrity requirements."
+            )
+
         snapshot_id = f"snap_{hashlib.md5(f'{repository.id}_{repository.resolved_commit_sha}'.encode()).hexdigest()[:10]}"
 
         existing_snapshot = db.query(RepositorySnapshot).filter(RepositorySnapshot.id == snapshot_id).first()

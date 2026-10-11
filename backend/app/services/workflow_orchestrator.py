@@ -105,7 +105,24 @@ class WorkflowOrchestrator:
         project_id: str,
         submission: ReviewActionSubmit
     ) -> ReviewAction:
-        """FR-14 & FR-27: Records an explicit researcher approval or correction."""
+        """FR-14 & FR-27: Records an explicit researcher approval or correction with prerequisite gating."""
+        # Enforce Guided checkpoint prerequisite gating (FR-14)
+        if submission.action_type == "approved":
+            config_dict = {code: prereqs for code, _, _, prereqs in CHECKPOINTS_CONFIG}
+            prereqs = config_dict.get(submission.checkpoint_name, [])
+            if prereqs:
+                existing_actions = db.query(ReviewAction).filter(
+                    ReviewAction.project_id == project_id,
+                    ReviewAction.action_type == "approved"
+                ).all()
+                approved_set = set(a.checkpoint_name for a in existing_actions)
+                unmet = [p for p in prereqs if p not in approved_set]
+                if unmet:
+                    raise ValueError(
+                        f"Cannot approve checkpoint '{submission.checkpoint_name}': "
+                        f"prerequisite checkpoint(s) {unmet} must be reviewed and approved first."
+                    )
+
         now_utc = datetime.now(timezone.utc)
         action = ReviewAction(
             id=f"act_{hashlib.md5(f'{project_id}_{submission.checkpoint_name}_{now_utc.isoformat()}'.encode()).hexdigest()[:10]}",
@@ -122,6 +139,22 @@ class WorkflowOrchestrator:
         db.commit()
         db.refresh(action)
         return action
+
+    def assert_checkpoint_accessible(self, db: Session, project_id: str, checkpoint_name: str):
+        """Validates that all upstream dependencies for a checkpoint are met."""
+        config_dict = {code: prereqs for code, _, _, prereqs in CHECKPOINTS_CONFIG}
+        prereqs = config_dict.get(checkpoint_name, [])
+        if prereqs:
+            existing_actions = db.query(ReviewAction).filter(
+                ReviewAction.project_id == project_id,
+                ReviewAction.action_type == "approved"
+            ).all()
+            approved_set = set(a.checkpoint_name for a in existing_actions)
+            unmet = [p for p in prereqs if p not in approved_set]
+            if unmet:
+                raise ValueError(
+                    f"Guided Mode Gate: Checkpoint '{checkpoint_name}' is blocked until prerequisite(s) {unmet} are approved."
+                )
 
     def run_automatic_mode(
         self,
@@ -238,20 +271,23 @@ class WorkflowOrchestrator:
 
         cite_str = " " + ", ".join(cites[:2]) if cites else ""
 
-        # Build honest empirical summary
+        # Build honest empirical summary distinguishing reported metrics from verified superiority
         if results:
             res_summary = "; ".join([
-                f"{r.model_name} on {r.dataset_name} reported {r.metric_name} of {r.metric_value}{r.metric_unit or ''} (seed {r.random_seed or 'unspecified'}) in repository logs"
+                f"{r.model_name or 'model'} on {r.dataset_name or 'dataset'} reported {r.metric_name} of {r.metric_value}{r.metric_unit or ''} (seed {r.random_seed or 'unspecified'})"
                 for r in results[:4]
             ])
             results_narrative = (
                 f"We extract quantitative evaluation artifacts from repository manifests. "
                 f"Empirical outcomes are documented as follows:\n\n"
                 f"{res_summary}.\n\n"
-                f"Importantly, each metric row remains traceable to source repository files, establishing scientific provenance."
+                f"Methodological note: These metrics represent unverified self-reported values extracted directly "
+                f"from repository log files. Independent replication, statistical significance testing, and controlled "
+                f"baseline comparisons have not been independently confirmed; the values reflect internal repository "
+                f"artifacts rather than verified claims of algorithmic superiority."
             )
         else:
-            res_summary = "Quantitative empirical metrics were not identified in repository artifacts"
+            res_summary = "no quantitative benchmark metrics identified"
             results_narrative = (
                 f"No empirical benchmark results or metrics CSV artifacts were detected in the repository codebase. "
                 f"Independent benchmark evaluation and baseline replication runs are required before quantitative superiority can be asserted."
@@ -261,20 +297,39 @@ class WorkflowOrchestrator:
         algo_desc = methodology.algorithm_description if methodology else "execution routines"
         pseudo_text = methodology.pseudocode if (methodology and methodology.pseudocode) else "Algorithm 1: Reconstructed Execution Flow"
 
+        # Grounded contribution statements derived from actual methodology and novelty proposals
+        comp_names = [c.name for c in snapshot.components] if snapshot.components else []
+        implemented_summary = f"modules ({', '.join(comp_names[:4])})" if comp_names else "core modules"
+        
+        contribution_bullets = []
+        if comp_names:
+            contribution_bullets.append(f"- Implementation: Concrete software realization of {implemented_summary} grounded in commit {snapshot.commit_sha}.")
+        if results:
+            contribution_bullets.append(f"- Empirical Reporting: Documentation of internal repository metrics ({res_summary}), maintained with explicit file-level provenance.")
+        else:
+            contribution_bullets.append("- Empirical Scope: Clear identification that empirical baseline replication is required, preventing uncorroborated performance assertions.")
+        if proposals:
+            top_proposal = proposals[0]
+            prop_text = getattr(top_proposal, "proposed_contribution", None) or (top_proposal.get("proposed_contribution") if isinstance(top_proposal, dict) else "")
+            if prop_text:
+                contribution_bullets.append(f"- Research Formulation: {prop_text}")
+
+        contributions_text = "\n".join(contribution_bullets) if contribution_bullets else "- Grounded codebase execution and provenance tracking."
+
         section_templates = [
             ("abstract", "Abstract", 0, (
-                f"We introduce an evidence-grounded framework addressing {project.topic or 'reproducible software and empirical research'}. "
-                f"Drawing directly from the repository implementation ({snapshot.commit_sha}), we analyze the execution architecture utilizing {algo_desc}. "
-                f"{results_narrative.split('.')[0]}. "
-                f"All code components, hyperparameter specifications, and execution artifacts are traceably linked to preserve scientific provenance."
+                f"This paper presents a structured analysis of the software system implementing {project.topic or 'computational methods'}. "
+                f"Drawing directly from the repository implementation at revision {snapshot.commit_sha}, we analyze the execution architecture ({algo_desc}). "
+                f"Available empirical artifacts ({res_summary}) are documented alongside implementation components. "
+                f"All code components, hyperparameter specifications, and execution artifacts are traceably linked to establish codebase provenance."
             )),
             ("introduction", "Introduction", 1, (
-                f"Modern computational research frequently distributes substantial engineering and algorithmic contributions across code repositories and configuration files{cite_str}. "
-                f"However, translating these artifacts into structured academic manuscripts often introduces a disconnect between what is implemented and what is claimed. "
-                f"To bridge this gap, this paper formalizes the methodology implemented in the {snapshot.repository.repository_name if snapshot.repository else 'project'} codebase. "
-                f"Our primary contributions are threefold: (1) an evidence-grounded architecture formalizing module execution; "
-                f"(2) an end-to-end evaluation ({res_summary}); "
-                f"and (3) claim-level provenance ensuring transparent reproducibility."
+                f"Modern computational research frequently distributes substantial engineering and algorithmic logic across software repositories and configuration files{cite_str}. "
+                f"However, translating these artifacts into academic manuscripts often introduces a disconnect between what is implemented, what is reported in logs, and what is hypothesized. "
+                f"To bridge this gap, this paper formalizes the methodology implemented in the {snapshot.repository.repository_name if snapshot.repository else 'project'} codebase.\n\n"
+                f"Specifically, we delineate three distinct levels of claims:\n"
+                f"{contributions_text}\n\n"
+                f"By distinguishing implemented components from self-reported metrics, this manuscript maintains rigorous scientific provenance."
             )),
             ("methodology", "System Architecture & Methodology", 2, (
                 f"The core methodology is grounded in the repository implementation ({snapshot.commit_sha}). "
@@ -288,8 +343,8 @@ class WorkflowOrchestrator:
             ("results", "Experimental Results & Evaluation", 3, results_narrative),
             ("conclusion", "Discussion & Conclusion", 4, (
                 f"In this work, we presented an evidence-grounded research synthesis of the {snapshot.repository.repository_name if snapshot.repository else 'analyzed'} system. "
-                f"By tightly coupling manuscript drafting with repository AST code inspection and empirical evaluation artifacts, our methodology establishes authentic scientific provenance. "
-                f"Future work will explore broader multi-modal code inspection and automated statistical consistency validation."
+                f"By coupling manuscript drafting with repository AST code inspection and empirical evaluation artifacts, our methodology distinguishes what the codebase implements from what its internal logs report. "
+                f"Future work should conduct multi-seed independent replications and cross-hardware validation to substantiate comparative performance claims."
             )),
             ("declarations", "Data & Code Availability", 5, (
                 f"The source code and evaluation artifacts supporting the findings of this study are available in the GitHub repository at {snapshot.repository.repository_url if snapshot.repository else 'the project repository'} (Commit SHA: {snapshot.commit_sha})."
@@ -321,7 +376,7 @@ class WorkflowOrchestrator:
                     content=s_content,
                     status="generated",
                     generation_status="generated",
-                    review_status="approved",
+                    review_status="unreviewed",
                     word_limit=600,
                     updated_at=now_utc
                 )
