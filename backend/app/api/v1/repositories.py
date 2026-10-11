@@ -50,10 +50,15 @@ def submit_repository(
             db,
             project_id=project_id,
             repository_url=data.repository_url,
-            branch_or_tag=data.branch_or_tag or "main"
+            branch_or_tag=data.branch_or_tag or "main",
+            resolved_commit_sha=data.resolved_commit_sha
         )
-        # Automatically build snapshot from codebase manifest
-        snapshot = repository_analyzer.create_snapshot_from_manifest(db, repo)
+        # Automatically build snapshot from codebase manifest or acquire files
+        snapshot = repository_analyzer.create_snapshot_from_manifest(
+            db,
+            repo,
+            file_manifest=data.file_manifest
+        )
         return RepositoryResponse.from_orm(repo)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))

@@ -56,7 +56,7 @@ def add_source(payload: SourceCreate, db: Session = Depends(get_db)):
         url=payload.url,
         abstract=payload.abstract,
         access_status=payload.access_status or "open",
-        verified_metadata=payload.verified_metadata if payload.verified_metadata is not None else True,
+        verified_metadata=payload.verified_metadata if payload.verified_metadata is not None else False,
         citation_key=cit_key
     )
     db.add(source)

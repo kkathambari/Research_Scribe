@@ -11,7 +11,7 @@ class SourceBase(BaseModel):
     url: Optional[str] = None
     abstract: Optional[str] = None
     access_status: Optional[str] = "open" # open, restricted, abstract_only
-    verified_metadata: Optional[bool] = True
+    verified_metadata: Optional[bool] = False
     citation_key: Optional[str] = None # e.g. Vaswani2017
 
 class SourceCreate(SourceBase):
@@ -74,3 +74,4 @@ class ScholarlySearchResponse(BaseModel):
     query: str
     total: int
     results: List[ScholarlySearchResultItem]
+    retrieval_status: str = "success"

@@ -65,18 +65,28 @@ async def upload_journal_template(
     if not profile:
         raise HTTPException(status_code=404, detail="Journal profile not found")
 
+    safe_filename = Path(file.filename).name
+    if not safe_filename.lower().endswith(".docx"):
+        raise HTTPException(status_code=400, detail="Only official .docx template files are supported.")
+
     dest_dir = settings.UPLOAD_DIR / "templates"
     dest_dir.mkdir(parents=True, exist_ok=True)
-    file_path = dest_dir / file.filename
+    file_path = (dest_dir / safe_filename).resolve()
+    if not file_path.is_relative_to(dest_dir.resolve()):
+        raise HTTPException(status_code=400, detail="Invalid template filename.")
 
+    MAX_SIZE = 25 * 1024 * 1024  # 25 MB
     content = await file.read()
+    if len(content) > MAX_SIZE:
+        raise HTTPException(status_code=413, detail="Template file exceeds maximum permitted size of 25MB.")
+
     file_path.write_bytes(content)
 
     template = journal_intelligence.import_template_file(
         db=db,
         profile_id=profile_id,
         file_path=file_path,
-        template_filename=file.filename
+        template_filename=safe_filename
     )
 
     return {

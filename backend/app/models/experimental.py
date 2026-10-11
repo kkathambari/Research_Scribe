@@ -36,7 +36,7 @@ class ExperimentalResult(Base):
     random_seed = Column(Integer, nullable=True)
     reported_or_reproduced = Column(String, default="reported")  # reported, reproduced
     reproduction_run_id = Column(String, nullable=True)
-    source_location = Column(String, nullable=True)  # e.g., "results/eval.csv:Row 4", "README.md:Table 2"
-    verification_status = Column(String, default="verified")  # verified, conflicting, unverified
+    source_location = Column(String, nullable=True)  # e.g., "results/eval.csv:Line 4"
+    verification_status = Column(String, default="extracted")  # extracted, source_located, consistency_checked, reproduced, verified
 
     artifact = relationship("ExperimentalArtifact", back_populates="results")

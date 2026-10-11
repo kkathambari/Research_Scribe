@@ -103,8 +103,9 @@ def export_manuscript(payload: ExportRequest, db: Session = Depends(get_db)):
 
 @router.get("/download/{filename}")
 def download_export(filename: str):
-    file_path = settings.EXPORTS_DIR / filename
-    if not file_path.exists():
+    safe_name = Path(filename).name
+    file_path = (settings.EXPORTS_DIR / safe_name).resolve()
+    if not file_path.is_relative_to(settings.EXPORTS_DIR.resolve()) or not file_path.is_file():
         raise HTTPException(status_code=404, detail="Export file not found")
     
     media_types = {
@@ -118,5 +119,5 @@ def download_export(filename: str):
     return FileResponse(
         path=file_path,
         media_type=media_type,
-        filename=filename
+        filename=safe_name
     )

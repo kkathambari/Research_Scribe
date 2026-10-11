@@ -48,16 +48,21 @@ def create_project(payload: ProjectCreate, db: Session = Depends(get_db)):
                 db=db,
                 project_id=project_id,
                 repository_url=payload.repository_url,
-                branch_or_tag=payload.branch_or_tag or "main"
+                branch_or_tag=payload.branch_or_tag or "main",
+                resolved_commit_sha=payload.resolved_commit_sha
             )
-            snapshot = repository_analyzer.create_snapshot_from_manifest(db, repo)
+            snapshot = repository_analyzer.create_snapshot_from_manifest(
+                db=db,
+                repository=repo,
+                file_manifest=payload.file_manifest
+            )
             repo_id = repo.id
             snapshot_id = snapshot.id
             project.status = "analyzed"
             db.commit()
         except Exception as e:
-            # Continue even if repository analysis encountered a warning
-            pass
+            project.status = "acquisition_failed"
+            db.commit()
 
     # Automatically create initial manuscript draft
     manuscript_id = str(uuid.uuid4())

@@ -8,9 +8,11 @@ class RepositorySubmitRequest(BaseModel):
     branch_or_tag: Optional[str] = Field("main", description="Branch, tag, or commit SHA")
     title: Optional[str] = Field(None, description="Project title")
     research_topic: Optional[str] = Field(None, description="Domain topic")
-    target_publication: Optional[str] = Field(None, description="Target journal / conference")
+    target_publication: Optional[str] = Field("IEEE Transactions", description="Target journal / conference")
     citation_style: Optional[str] = Field("IEEE", description="Citation style")
     generation_mode: Optional[str] = Field("automatic", description="automatic or guided")
+    resolved_commit_sha: Optional[str] = Field(None, description="Explicit commit SHA")
+    file_manifest: Optional[List[Dict[str, Any]]] = Field(None, description="Optional explicit file manifest (for test fixtures or custom snapshots)")
 
 class RepositoryFileResponse(BaseModel):
     id: str
@@ -84,7 +86,7 @@ class ExperimentalResultResponse(BaseModel):
     random_seed: Optional[int] = None
     reported_or_reproduced: str = "reported"
     source_location: Optional[str] = None
-    verification_status: str = "verified"
+    verification_status: str = "extracted"
 
     class Config:
         from_attributes = True
