@@ -161,19 +161,35 @@ class WorkflowOrchestrator:
         db: Session,
         project_id: str,
         repository_url: Optional[str] = None,
-        journal_name: Optional[str] = None
+        journal_name: Optional[str] = None,
+        target_journal: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         FR-13: One-click Automatic Mode executing end-to-end repository analysis,
         literature retrieval, grounded section drafting, citation verification,
         journal template matching, and compliance audit.
         """
-        project = db.query(Project).filter(Project.id == project_id).first()
+        if db is not None:
+            project = db.query(Project).filter(Project.id == project_id).first()
+        else:
+            project = None
+
+        repo_url = repository_url or (project.repository_url if project else None)
+        if not repo_url:
+            raise ValueError(
+                "Automatic Mode requires an explicit repository_url or project-associated repository. "
+                "Defaulting to an arbitrary third-party repository is prohibited under SRS v3.0 provenance rules."
+            )
+
+        venue = journal_name or target_journal or (project.target_publication if project else None)
+        if not venue:
+            raise ValueError(
+                "Automatic Mode requires an explicit journal_name or project-associated publication. "
+                "Defaulting to generic publisher profiles without venue selection is prohibited."
+            )
+
         if not project:
             raise ValueError(f"Project {project_id} not found.")
-
-        repo_url = repository_url or project.repository_url or "https://github.com/facebookresearch/llama"
-        target_journal = journal_name or project.target_publication or "IEEE Transactions"
 
         # 1. Ingest Repository & Create Snapshot (FR-01, FR-02, FR-03, FR-04, FR-05, FR-06)
         existing_snapshot = (
@@ -192,7 +208,7 @@ class WorkflowOrchestrator:
         novelty_proposals = novelty_analyzer.analyze_research_gaps_and_contributions(db, project_id, snapshot)
 
         # 3. Resolve Journal Profile (FR-19, FR-21)
-        profile = journal_intelligence.get_or_create_journal_profile(db, target_journal, project_id)
+        profile = journal_intelligence.get_or_create_journal_profile(db, venue, project_id)
 
         # 4. Initialize or update Manuscript (FR-12, FR-22)
         manuscript = db.query(Manuscript).filter(Manuscript.project_id == project_id).first()
@@ -223,6 +239,7 @@ class WorkflowOrchestrator:
         # 6. Run Journal Compliance Validation (FR-24)
         compliance_report = journal_intelligence.validate_compliance(db, manuscript, profile)
 
+        project.generation_mode = "automatic"
         project.status = "completed"
         db.commit()
 
@@ -237,6 +254,44 @@ class WorkflowOrchestrator:
             "sections_generated": len(manuscript.sections)
         }
 
+    def generate_guided_sections(self, db: Session, project_id: str) -> Manuscript:
+        """
+        Gated section generation execution for Guided Mode.
+        Enforces that 'outline' and 'contributions' checkpoints are approved before generation can run.
+        """
+        project = db.query(Project).filter(Project.id == project_id).first()
+        if not project:
+            raise ValueError(f"Project {project_id} not found.")
+
+        # Check prerequisite gates
+        self.assert_checkpoint_accessible(db, project_id, "sections")
+
+        snapshot = (
+            db.query(RepositorySnapshot)
+            .join(Repository)
+            .filter(Repository.project_id == project_id)
+            .first()
+        )
+        if not snapshot:
+            raise ValueError(f"No repository snapshot found for project {project_id}.")
+
+        profile = journal_intelligence.get_or_create_journal_profile(db, project.target_publication or "IEEE Transactions", project_id)
+        novelty_proposals = novelty_analyzer.analyze_research_gaps_and_contributions(db, project_id, snapshot)
+        manuscript = db.query(Manuscript).filter(Manuscript.project_id == project_id).first()
+        if not manuscript:
+            manuscript = Manuscript(
+                id=f"ms_{project_id}",
+                project_id=project_id,
+                title=project.title,
+                target_journal=profile.journal_name,
+                citation_style=profile.citation_style
+            )
+            db.add(manuscript)
+            db.commit()
+
+        self._generate_grounded_sections(db, project, manuscript, snapshot, profile, novelty_proposals, enforce_guided_gates=True)
+        return manuscript
+
     def _generate_grounded_sections(
         self,
         db: Session,
@@ -244,12 +299,23 @@ class WorkflowOrchestrator:
         manuscript: Manuscript,
         snapshot: RepositorySnapshot,
         profile: JournalProfile,
-        proposals: List[Any]
+        proposals: List[Any],
+        enforce_guided_gates: bool = False
     ):
         """
         Generates academic sections grounded directly in code components, methodology, and metrics.
-        Preserves user-approved and customized sections from deletion.
+        Enforces Guided Mode gates when running in guided mode operations.
         """
+        if enforce_guided_gates or (project.generation_mode == "guided" and enforce_guided_gates):
+            approved_actions = db.query(ReviewAction).filter(
+                ReviewAction.project_id == project.id,
+                ReviewAction.action_type == "approved"
+            ).all()
+            approved_cps = set(a.checkpoint_name for a in approved_actions)
+            if "contributions" not in approved_cps or "outline" not in approved_cps:
+                raise ValueError(
+                    "Guided Mode Gate: Section generation is blocked until 'contributions' and 'outline' checkpoints have been approved by the researcher."
+                )
         methodology = snapshot.methodology
         artifacts = snapshot.experimental_artifacts
         results = (

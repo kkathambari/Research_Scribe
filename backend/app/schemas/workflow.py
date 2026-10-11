@@ -31,6 +31,9 @@ class ResearchGapProposal(BaseModel):
     comparison_rationale: str
     proposed_contribution: str
     source_ids: List[str] = []
+    supporting_passages: List[str] = []
+    comparison_limitations: Optional[str] = None
+    status: str = "hypothesis_requiring_review"
 
 class GuidedCheckpointStatus(BaseModel):
     checkpoint: str

@@ -19,17 +19,17 @@ def test_audit_repository_integrity_no_silent_synthetic_manifest(client: TestCli
     assert submit_resp.status_code == 400
     assert "failed" in submit_resp.json()["detail"].lower() or "not acquire" in submit_resp.json()["detail"].lower()
 
-@pytest.mark.asyncio
-async def test_audit_literature_retrieval_zero_fabricated_citations():
+def test_audit_literature_retrieval_zero_fabricated_citations():
     """
     Audit Finding Critical 3: Verifies that external literature search queries
     yielding no results return an empty result set and never invent imaginary author personas.
     """
-    res = await retrieval_service.search(
+    import asyncio
+    res = asyncio.run(retrieval_service.search(
         query="unlikely_random_query_xyz_987654321",
         limit=5,
         allow_test_fixtures=False
-    )
+    ))
     assert res.total == 0
     assert len(res.results) == 0
     # Must not contain imaginary names

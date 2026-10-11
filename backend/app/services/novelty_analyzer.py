@@ -89,33 +89,42 @@ class NoveltyAnalyzer:
         topic_summary = ", ".join(source_topics) if source_topics else (primary_source.title[:50] if primary_source else "")
 
         # 1. Problem Formulation & Scope
+        supporting_passages = [s.abstract[:200] for s in sources if s.abstract][:2]
+        comp_limitation = f"Comparison is based on abstracts of {len(sources)} retrieved paper(s). Full-text ablation verification and author confirmation are required."
+
         if has_sources and primary_source:
             gap_text = (
-                f"Retrieved literature ('{primary_source.title[:65]}') investigates {topic_summary or 'domain principles'} "
-                f"at a conceptual level, but does not provide an automated AST-grounded pipeline for executable verification."
+                f"Retrieved literature ('{primary_source.title[:65]}') investigates {topic_summary or 'domain principles'}. "
+                f"Whether this published formulation covers the specific execution scope of the repository remains a research hypothesis requiring researcher validation."
             )
             rationale_text = (
-                f"While '{primary_source.title[:50]}' articulates theoretical concepts ({topic_summary or 'domain concepts'}), "
-                f"the repository establishes concrete executable constraints through {len(components)} identified code modules."
+                f"Analysis compares published scope in '{primary_source.title[:50]}' with {len(components)} "
+                f"identified code components ({', '.join(comp_names[:3]) or 'modules'})."
             )
             contrib_text = (
-                f"Executable problem formulation implementing {', '.join(comp_names[:3]) or 'core modules'} "
-                f"in repository commit {snapshot.commit_sha if snapshot else 'HEAD'}."
+                f"Hypothesized Contribution (Requires Review): Concrete software realization of {', '.join(comp_names[:3]) or 'core modules'} "
+                f"grounded in repository commit {snapshot.commit_sha if snapshot else 'HEAD'}."
             )
             g_prob = ResearchGapProposal(
                 dimension="Problem Formulation & Scope",
                 identified_gap=gap_text,
                 comparison_rationale=rationale_text,
                 proposed_contribution=contrib_text,
-                source_ids=source_ids[:1]
+                source_ids=source_ids[:1],
+                supporting_passages=supporting_passages,
+                comparison_limitations=comp_limitation,
+                status="hypothesis_requiring_review"
             )
         else:
             g_prob = ResearchGapProposal(
                 dimension="Problem Formulation & Scope",
                 identified_gap="Comparative literature baseline has not yet been ingested for this project.",
                 comparison_rationale="Novelty claims cannot be independently verified until related peer-reviewed publications are retrieved.",
-                proposed_contribution=f"Executable problem formulation reconstructed from repository AST definitions ({', '.join(comp_names[:3]) or 'core modules'}).",
-                source_ids=[]
+                proposed_contribution=f"Hypothesized Contribution (Requires Review): Executable problem formulation reconstructed from repository AST definitions ({', '.join(comp_names[:3]) or 'core modules'}).",
+                source_ids=[],
+                supporting_passages=[],
+                comparison_limitations="No literature ingested; comparative gap is undefined.",
+                status="hypothesis_requiring_review"
             )
         proposals.append(g_prob)
 
@@ -124,28 +133,33 @@ class NoveltyAnalyzer:
         arch_name = top_models[0] if top_models else (comp_names[0] if comp_names else "Core Architecture")
         if has_sources and primary_source:
             arch_gap = (
-                f"Prior architectures documented in '{primary_source.title[:50]}' focus on high-level algorithmic design, "
-                f"leaving modular boundary decoupling to ad-hoc implementation scripts."
+                f"Prior architectures documented in '{primary_source.title[:50]}' define algorithmic structures for {topic_summary or 'domain tasks'}. "
+                f"A direct architectural equivalence with repository components ({', '.join(comp_names[:4]) or 'modular units'}) has not been formally verified."
             )
             arch_rationale = (
-                f"The repository defines distinct modular components ({', '.join(comp_names[:4]) or 'modular units'}), "
-                f"enabling reproducible component inspection."
+                f"Contrasts documented architecture in '{primary_source.title[:45]}' against AST-identified modular components: {', '.join(comp_names[:4]) or 'modules'}."
             )
-            arch_contrib = f"Modular architectural realization of {arch_name} with explicit AST component boundaries."
+            arch_contrib = f"Hypothesized Contribution (Requires Review): Modular architecture implementing {arch_name} with explicit AST boundaries."
             g_arch = ResearchGapProposal(
                 dimension="Model Architecture & Modularity",
                 identified_gap=arch_gap,
                 comparison_rationale=arch_rationale,
                 proposed_contribution=arch_contrib,
-                source_ids=source_ids[:2]
+                source_ids=source_ids[:2],
+                supporting_passages=supporting_passages,
+                comparison_limitations=comp_limitation,
+                status="hypothesis_requiring_review"
             )
         else:
             g_arch = ResearchGapProposal(
                 dimension="Model Architecture & Modularity",
                 identified_gap="Architectural novelty requires comparative evaluation against published models in the target domain.",
                 comparison_rationale="Literature search has not yet retrieved comparative baseline architectures.",
-                proposed_contribution=f"Modular design reconstructed from repository components: {', '.join(comp_names[:4]) or arch_name}.",
-                source_ids=[]
+                proposed_contribution=f"Hypothesized Contribution (Requires Review): Modular design reconstructed from repository components: {', '.join(comp_names[:4]) or arch_name}.",
+                source_ids=[],
+                supporting_passages=[],
+                comparison_limitations="No literature ingested.",
+                status="hypothesis_requiring_review"
             )
         proposals.append(g_arch)
 
@@ -153,15 +167,18 @@ class NoveltyAnalyzer:
         train_comps = [c.name for c in components if "train" in c.name.lower() or "optim" in c.name.lower()]
         algo_desc = methodology.algorithm_description if methodology else "execution routines"
         algo_gap = (
-            f"Algorithmic descriptions in retrieved sources ({source_titles[0][:50] if has_sources else 'prior literature'}) "
-            f"focus on mathematical formulation without linking steps to concrete execution routines."
+            f"Algorithmic routines in retrieved literature ({source_titles[0][:50] if has_sources else 'prior literature'}) "
+            f"and repository code ({algo_desc[:80]}) require comparative parameter alignment to verify novel optimization characteristics."
         )
         g_algo = ResearchGapProposal(
             dimension="Optimization & Core Algorithms",
             identified_gap=algo_gap,
             comparison_rationale=f"Repository implementation defines concrete execution logic: {algo_desc[:120]}.",
-            proposed_contribution=f"Grounded algorithmic execution flow linking mathematical operations to concrete code functions ({', '.join(train_comps[:2]) or 'execution pipeline'}).",
-            source_ids=source_ids[:1] if has_sources else []
+            proposed_contribution=f"Hypothesized Contribution (Requires Review): Execution flow linking optimization operations to concrete code functions ({', '.join(train_comps[:2]) or 'execution pipeline'}).",
+            source_ids=source_ids[:1] if has_sources else [],
+            supporting_passages=supporting_passages,
+            comparison_limitations=comp_limitation,
+            status="hypothesis_requiring_review"
         )
         proposals.append(g_algo)
 
@@ -170,12 +187,15 @@ class NoveltyAnalyzer:
         g_data = ResearchGapProposal(
             dimension="Dataset Provenance & Quality",
             identified_gap=(
-                f"Published literature ({source_titles[0][:50] if has_sources else 'domain papers'}) rarely provides "
-                f"end-to-end dataset preprocessing manifests alongside model code."
+                f"Data handling procedures cited in literature ({source_titles[0][:50] if has_sources else 'domain papers'}) "
+                f"must be compared against repository data pipeline structures ({', '.join(data_comps[:2]) or 'data handlers'})."
             ),
             comparison_rationale=f"Repository code documents data preprocessing structures ({', '.join(data_comps[:2]) or 'data ingestion handlers'}).",
-            proposed_contribution="Explicit pipeline documentation establishing repeatable data provenance.",
-            source_ids=source_ids[:2] if has_sources else []
+            proposed_contribution="Hypothesized Contribution (Requires Review): Dataset ingestion and split documentation establishing repeatable data provenance.",
+            source_ids=source_ids[:2] if has_sources else [],
+            supporting_passages=supporting_passages,
+            comparison_limitations=comp_limitation,
+            status="hypothesis_requiring_review"
         )
         proposals.append(g_data)
 
@@ -186,19 +206,25 @@ class NoveltyAnalyzer:
             g_eval = ResearchGapProposal(
                 dimension="Evaluation Setup & Baselines",
                 identified_gap=(
-                    f"Prior works frequently evaluate under varying benchmark splits without releasing deterministic seed configurations."
+                    f"Baseline evaluations in literature and repository metrics across {len(results)} records require controlled cross-validation under identical splits and hardware."
                 ),
                 comparison_rationale=f"Extracted evaluation artifacts record specific splits and seed settings across {len(results)} metrics.",
-                proposed_contribution="Standardized comparative evaluation using explicit split assignments and seed controls.",
-                source_ids=source_ids[:2] if has_sources else []
+                proposed_contribution="Hypothesized Contribution (Requires Review): Comparative evaluation framework using explicit split assignments and seed controls.",
+                source_ids=source_ids[:2] if has_sources else [],
+                supporting_passages=supporting_passages,
+                comparison_limitations="Repository metrics are self-reported; comparative replication is pending.",
+                status="hypothesis_requiring_review"
             )
         else:
             g_eval = ResearchGapProposal(
                 dimension="Evaluation Setup & Baselines",
                 identified_gap="Empirical benchmarking metrics were not identified in the repository artifacts.",
                 comparison_rationale="No benchmark CSV, JSON, or log files were extracted from the codebase.",
-                proposed_contribution="Identified evaluation routines in code; execution artifacts required to establish empirical baseline.",
-                source_ids=[]
+                proposed_contribution="Hypothesized Contribution (Requires Review): Identified evaluation routines in code; execution artifacts required to establish empirical baseline.",
+                source_ids=source_ids[:1] if has_sources else [],
+                supporting_passages=supporting_passages if has_sources else ["No empirical artifacts detected in repository codebase."],
+                comparison_limitations="Zero empirical artifacts detected.",
+                status="hypothesis_requiring_review"
             )
         proposals.append(g_eval)
 
@@ -207,28 +233,37 @@ class NoveltyAnalyzer:
             metric_names = list(set(r.metric_name for r in results))
             g_metrics = ResearchGapProposal(
                 dimension="Evaluation Metrics & Numerical Rigor",
-                identified_gap="Prior works frequently report aggregate metrics without recording file-level provenance or verification status.",
+                identified_gap="Extracted numerical results represent internal repository logs; statistical significance tests against baseline papers have not been independently performed.",
                 comparison_rationale=f"Extracted {len(results)} distinct result entries across metrics: {', '.join(metric_names[:3])}.",
-                proposed_contribution="Traceable experimental evidence ledger linking every metric to its source file and row location.",
-                source_ids=source_ids[:1] if has_sources else []
+                proposed_contribution="Hypothesized Contribution (Requires Review): Experimental evidence ledger linking every metric to its source file and row location.",
+                source_ids=source_ids[:1] if has_sources else [],
+                supporting_passages=supporting_passages,
+                comparison_limitations="Independent statistical significance has not been demonstrated.",
+                status="hypothesis_requiring_review"
             )
         else:
             g_metrics = ResearchGapProposal(
                 dimension="Evaluation Metrics & Numerical Rigor",
                 identified_gap="No numerical results detected in repository; quantitative claims cannot be substantiated without experimental artifacts.",
                 comparison_rationale="Scientific integrity requires withholding performance claims until empirical logs are provided.",
-                proposed_contribution="Flagged evidence insufficiency in experimental ledger to prevent unverified claims.",
-                source_ids=[]
+                proposed_contribution="Hypothesized Contribution (Requires Review): Flagged evidence insufficiency in experimental ledger to prevent unverified claims.",
+                source_ids=source_ids[:1] if has_sources else [],
+                supporting_passages=supporting_passages if has_sources else ["No numerical evidence available in repository files."],
+                comparison_limitations="No numerical evidence available.",
+                status="hypothesis_requiring_review"
             )
         proposals.append(g_metrics)
 
         # 7. Handled Limitations & Threats to Validity
         g_limits = ResearchGapProposal(
             dimension="Handled Limitations & Threats to Validity",
-            identified_gap="Existing approaches frequently downplay reproducibility threats, environmental variance, and unverified citation claims.",
-            comparison_rationale="Our framework establishes explicit claim-to-evidence corroboration and journal guideline compliance audits.",
-            proposed_contribution="Comprehensive limitation analysis identifying evidence gaps, seed omissions, and verification constraints.",
-            source_ids=source_ids
+            identified_gap="Threats to validity include potential distribution shift, unreproduced random seeds, and unverified publisher guideline assumptions.",
+            comparison_rationale="Our framework provides explicit claim-to-evidence corroboration and journal guideline compliance audits.",
+            proposed_contribution="Hypothesized Contribution (Requires Review): Comprehensive limitation analysis identifying evidence gaps, seed omissions, and verification constraints.",
+            source_ids=source_ids,
+            supporting_passages=supporting_passages,
+            comparison_limitations="Threats to validity analysis is static and requires domain specialist appraisal.",
+            status="hypothesis_requiring_review"
         )
         proposals.append(g_limits)
 

@@ -64,7 +64,9 @@ class ComplianceCheckResponse(BaseModel):
 class ComplianceReportResponse(BaseModel):
     manuscript_id: str
     journal_name: str
-    overall_status: str  # compliant, non_compliant, warnings_detected
+    overall_status: str  # compliant, non_compliant, warnings_detected, unverified_profile_provisional
+    profile_verification_status: str = "unverified_default"
+    is_officially_confirmed: bool = False
     passed_count: int
     failed_count: int
     warning_count: int

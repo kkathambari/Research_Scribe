@@ -1,4 +1,5 @@
 import os
+import re
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 import docx
@@ -44,7 +45,8 @@ class ManuscriptExporterService:
                 claims,
                 citation_style,
                 include_verification_appendix,
-                template_path
+                template_path,
+                abstract=manuscript.get("abstract", "")
             )
             return out_path
 
@@ -71,7 +73,8 @@ class ManuscriptExporterService:
         claims: Optional[List[Dict[str, Any]]],
         citation_style: str,
         include_verification_appendix: bool,
-        template_path: Optional[str] = None
+        template_path: Optional[str] = None,
+        abstract: str = ""
     ):
         """FR-23: Template-preserving DOCX assembly retaining fonts, margins, headers, and footers."""
         is_template_loaded = False
@@ -90,26 +93,33 @@ class ManuscriptExporterService:
             replaced_types = set()
 
             for p in doc.paragraphs:
-                p_text_lower = p.text.lower()
-                # Title placeholder
-                if any(tag in p_text_lower for tag in ["{{title}}", "[paper title]", "title of paper"]):
+                # Direct in-line placeholder replacements
+                if "{{TITLE}}" in p.text or "{{title}}" in p.text:
+                    p.text = re.sub(r'\{\{TITLE\}\}', title, p.text, flags=re.IGNORECASE)
+                elif p.text.strip().lower() in ["[paper title]", "title of paper"]:
                     p.text = title
-                    if "Title" in doc.styles:
-                        p.style = doc.styles["Title"]
-                # Abstract placeholder
-                elif any(tag in p_text_lower for tag in ["{{abstract}}", "[abstract]"]):
-                    abs_sec = sec_by_type.get("abstract")
-                    if abs_sec:
-                        p.text = abs_sec.get("content", "")
-                        replaced_types.add("abstract")
-                # Introduction placeholder
-                elif any(tag in p_text_lower for tag in ["{{introduction}}", "[introduction]"]):
+
+                if "{{ABSTRACT}}" in p.text or "{{abstract}}" in p.text:
+                    abs_text = sec_by_type.get("abstract", {}).get("content") or abstract or "This manuscript presents an evidence-grounded investigation."
+                    p.text = re.sub(r'\{\{ABSTRACT\}\}', abs_text, p.text, flags=re.IGNORECASE)
+                    replaced_types.add("abstract")
+                elif p.text.strip().lower() in ["[abstract]"]:
+                    abs_text = sec_by_type.get("abstract", {}).get("content") or abstract or "This manuscript presents an evidence-grounded investigation."
+                    p.text = abs_text
+                    replaced_types.add("abstract")
+
+                if "{{AUTHORS}}" in p.text or "{{authors}}" in p.text:
+                    p.text = re.sub(r'\{\{AUTHORS\}\}', "Research Author(s)", p.text, flags=re.IGNORECASE)
+                elif p.text.strip().lower() in ["[author]", "[authors]"]:
+                    p.text = "Research Author(s)"
+
+                if "{{INTRODUCTION}}" in p.text or "{{introduction}}" in p.text or p.text.strip().lower() == "[introduction]":
                     intro_sec = sec_by_type.get("introduction")
                     if intro_sec:
                         p.text = intro_sec.get("content", "")
                         replaced_types.add("introduction")
-                # Keywords placeholder
-                elif any(tag in p_text_lower for tag in ["{{keywords}}", "[keywords]"]):
+
+                if "{{KEYWORDS}}" in p.text or "{{keywords}}" in p.text or p.text.strip().lower() == "[keywords]":
                     p.text = "Keywords: research automation; repository analysis; evidence provenance; reproducible science"
 
             # Append remaining sections using template styles

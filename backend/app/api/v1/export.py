@@ -19,6 +19,20 @@ def export_manuscript(payload: ExportRequest, db: Session = Depends(get_db)):
     if not manuscript:
         raise HTTPException(status_code=404, detail="Manuscript not found")
 
+    project = manuscript.project
+    if project and project.generation_mode == "guided":
+        from app.models.workflow import ReviewAction
+        approved_actions = db.query(ReviewAction).filter(
+            ReviewAction.project_id == project.id,
+            ReviewAction.action_type == "approved"
+        ).all()
+        approved_cps = set(a.checkpoint_name for a in approved_actions)
+        if "compliance" not in approved_cps:
+            raise HTTPException(
+                status_code=400,
+                detail="Guided Mode Gate: Manuscript export is blocked until 'compliance' checkpoint has been reviewed and approved by the researcher."
+            )
+
     sections_list = [
         {
             "id": sec.id,

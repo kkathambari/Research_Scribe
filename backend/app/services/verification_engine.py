@@ -330,23 +330,49 @@ class CitationVerificationService:
         if claim_has_contradiction and ev_has_positive:
             return best_ev, 0.85, "contradicted", "Discrepancy detected: Claim asserts negative/inferior finding while source passage reports positive improvement."
 
-        # Numerical fact-checking: claims asserting specific numbers must have numerical corroboration
-        claim_numbers = set(re.findall(r'\b\d+(?:\.\d+)?%?', claim_text))
-        # Exclude citation years (e.g. 2017, 2024) and pure single digit section numbers
-        substantive_numbers = {
-            n for n in claim_numbers 
-            if not (n.isdigit() and len(n) == 4 and 1900 <= int(n) <= 2030)
-            and not (n.isdigit() and int(n) <= 10 and f"[{n}]" in claim_text)
-        }
+        # Numerical & Unit fact-checking: claims asserting specific numbers and units must be corroborated
+        claim_number_matches = re.findall(r'\b(\d+(?:\.\d+)?)\s*(%|ms|s|sec|seconds|gb|mb|kb|tokens|parameters|params|folds?|times|x)?(?=\b|\s|$|[.,;!?])', claim_text, re.IGNORECASE)
+        substantive_numbers = []
+        for val, unit in claim_number_matches:
+            # Exclude citation years (e.g. 2017, 2024) and single digit bracket references [1]
+            if val.isdigit() and len(val) == 4 and 1900 <= int(val) <= 2030:
+                continue
+            if val.isdigit() and int(val) <= 10 and f"[{val}]" in claim_text:
+                continue
+            unit_norm = unit.strip().lower() if unit else ""
+            substantive_numbers.append((val, unit_norm))
+
         if substantive_numbers and best_ev:
-            ev_numbers = set(re.findall(r'\b\d+(?:\.\d+)?%?', best_ev["passage_text"]))
-            missing_numbers = substantive_numbers - ev_numbers
-            if missing_numbers:
+            ev_text = best_ev["passage_text"].lower()
+            missing_or_mismatched = []
+            for num_val, unit_str in substantive_numbers:
+                if num_val not in ev_text:
+                    missing_or_mismatched.append(f"{num_val}{unit_str}")
+                elif unit_str and unit_str not in ["x", "times"]:
+                    # Ensure the unit is also present in proximity or within passage
+                    if unit_str not in ev_text:
+                        missing_or_mismatched.append(f"{num_val} (unit '{unit_str}' missing in evidence)")
+            if missing_or_mismatched:
                 return (
                     best_ev,
                     min(0.35, round(max_overlap_score, 2)),
                     "unverified",
-                    f"Numerical discrepancy: The claim asserts numerical metrics ({', '.join(sorted(missing_numbers))}) that are not corroborated in the cited evidence passage."
+                    f"Numerical discrepancy: The claim asserts numerical metrics ({', '.join(missing_or_mismatched)}) that are not corroborated in the cited evidence passage."
+                )
+
+        # Causal assertion vs correlation check
+        causal_cues = ["causes", "caused", "leads to", "results in", "proves that", "demonstrates that", "attributable to"]
+        claim_has_causal = any(cue in claim_clean for cue in causal_cues)
+        if claim_has_causal and best_ev:
+            ev_lower = best_ev["passage_text"].lower()
+            correlation_only = any(c in ev_lower for c in ["correlated", "associated with", "linked to", "suggests", "co-occurs"])
+            has_direct_causal = any(c in ev_lower for c in ["demonstrates causal", "mechanistic", "proves that", "directly causes", "experimentally verified"])
+            if correlation_only and not has_direct_causal:
+                return (
+                    best_ev,
+                    min(0.40, round(max_overlap_score, 2)),
+                    "partially_supported",
+                    "Causal inference requires caution: Source reports associative or observational findings rather than proven causal mechanisms."
                 )
 
         # Comparative claim check: claims of superiority require comparative evidence
@@ -362,10 +388,10 @@ class CitationVerificationService:
                 )
 
         # Assign status based on overlap threshold
-        if max_overlap_score >= 0.45:
+        if max_overlap_score >= 0.50:
             page_info = f" (Page {best_ev.get('page_number', 1)})" if best_ev and best_ev.get('page_number') else ""
             return best_ev, round(max_overlap_score, 2), "supported", f"Source passage directly supports the asserted statement{page_info}."
-        elif max_overlap_score >= 0.22:
+        elif max_overlap_score >= 0.25:
             return best_ev, round(max_overlap_score, 2), "partially_supported", "Source evidence partially corroborates the claim, but authorial generalization or extrapolation is present."
         elif best_ev:
             return best_ev, round(max_overlap_score, 2), "unverified", "Evidence passage was located in source, but lexical and semantic alignment is too weak to confirm factual support."

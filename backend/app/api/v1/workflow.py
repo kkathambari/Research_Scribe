@@ -69,6 +69,19 @@ def get_literature_comparisons(project_id: str, db: Session = Depends(get_db)):
     """FR-10 & FR-11: Retrieves literature comparison records across methods, datasets, and limitations."""
     return novelty_analyzer.get_literature_comparisons(db, project_id)
 
+@router.post("/generate-sections/{project_id}")
+def generate_sections(project_id: str, db: Session = Depends(get_db)):
+    """Gated section generation execution for Guided Mode."""
+    try:
+        manuscript = workflow_orchestrator.generate_guided_sections(db, project_id)
+        return {
+            "status": "success",
+            "manuscript_id": manuscript.id,
+            "sections_count": len(manuscript.sections)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
 @router.post("/run-automatic/{project_id}")
 def run_automatic_generation(
     project_id: str,

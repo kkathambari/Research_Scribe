@@ -76,7 +76,7 @@ class RepositoryAnalyzer:
                     timeout=5
                 )
                 if out.strip():
-                    return out.strip()[:12]
+                    return out.strip()
             except Exception:
                 return None
 
@@ -91,9 +91,9 @@ class RepositoryAnalyzer:
             for line in out.strip().splitlines():
                 parts = line.split()
                 if len(parts) >= 2 and (parts[1] == f"refs/heads/{branch_or_tag}" or parts[1] == f"refs/tags/{branch_or_tag}" or branch_or_tag in parts[1]):
-                    return parts[0][:12]
+                    return parts[0]
                 elif parts:
-                    return parts[0][:12]
+                    return parts[0]
         except Exception as e:
             logger.debug(f"git ls-remote failed for {repository_url}: {e}")
 
@@ -112,7 +112,7 @@ class RepositoryAnalyzer:
                     data = resp.json()
                     sha = data.get("sha")
                     if sha:
-                        return sha[:12]
+                        return sha
         except Exception as e:
             logger.debug(f"GitHub commits API query failed for {owner}/{repo_name}: {e}")
 
@@ -143,7 +143,7 @@ class RepositoryAnalyzer:
                     f"Genuine Git commit SHA is required to guarantee research provenance under SRS v3.0 scientific integrity requirements."
                 )
             # Explicit unverified marker when researcher explicitly opts in
-            commit_sha = f"UNVERIFIED_{hashlib.sha1(f'{owner}/{repo_name}@{branch_or_tag}'.encode()).hexdigest()[:8]}"
+            commit_sha = f"UNVERIFIED_{hashlib.sha1(f'{owner}/{repo_name}@{branch_or_tag}'.encode()).hexdigest()}"
             acq_status = "acquired_unverified_commit"
         else:
             acq_status = "acquired"
@@ -186,7 +186,7 @@ class RepositoryAnalyzer:
         max_file_size: int = 350000
     ) -> List[Dict[str, Any]]:
         """
-        Acquires actual files from the designated Git repository or local filesystem.
+        Acquires actual files from the designated Git repository or local filesystem at the exact commit.
         Fails explicitly if repository content cannot be obtained; never generates synthetic files.
         """
         # A) Check if local path exists
@@ -194,30 +194,32 @@ class RepositoryAnalyzer:
         if repo_path.is_dir():
             return self._scan_directory_files(repo_path, max_files, max_file_size)
 
-        # B) Try git clone into temporary directory
+        # B) Try git clone into temporary directory and checkout exact commit SHA
         try:
             with tempfile.TemporaryDirectory() as tmp_dir:
-                cmd = [
-                    "git", "clone", "--depth", "1",
-                    "--branch", repository.selected_revision,
-                    repository.repository_url, tmp_dir
-                ]
+                cmd = ["git", "clone", repository.repository_url, tmp_dir]
                 proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
                 if proc.returncode == 0:
+                    if repository.resolved_commit_sha and not repository.resolved_commit_sha.startswith("UNVERIFIED"):
+                        co_proc = subprocess.run(
+                            ["git", "checkout", repository.resolved_commit_sha],
+                            cwd=tmp_dir, capture_output=True, text=True, timeout=10
+                        )
                     files = self._scan_directory_files(Path(tmp_dir), max_files, max_file_size)
                     if files:
                         return files
         except Exception as e:
             logger.debug(f"Git clone acquisition failed for {repository.repository_url}: {e}")
 
-        # C) Try GitHub Tree REST API
+        # C) Try GitHub Tree REST API using exact resolved commit SHA
         try:
             headers = {"User-Agent": "ResearchScribe/3.0"}
             github_token = os.environ.get("GITHUB_TOKEN")
             if github_token:
                 headers["Authorization"] = f"Bearer {github_token}"
 
-            tree_url = f"https://api.github.com/repos/{repository.owner_name}/{repository.repository_name}/git/trees/{repository.selected_revision}?recursive=1"
+            target_revision = repository.resolved_commit_sha or repository.selected_revision
+            tree_url = f"https://api.github.com/repos/{repository.owner_name}/{repository.repository_name}/git/trees/{target_revision}?recursive=1"
             with httpx.Client(timeout=10.0) as client:
                 resp = client.get(tree_url, headers=headers)
                 if resp.status_code == 200:

@@ -128,7 +128,33 @@ class JournalIntelligence:
         if profile:
             return profile
 
-        defaults = DEFAULT_JOURNAL_PROFILES.get(journal_name, DEFAULT_JOURNAL_PROFILES["IEEE Transactions"])
+        is_known_venue = journal_name in DEFAULT_JOURNAL_PROFILES
+        if is_known_venue:
+            defaults = DEFAULT_JOURNAL_PROFILES[journal_name]
+            v_status = "unverified_publisher_default"
+            publisher = defaults.get("publisher", "Academic Publisher")
+            guidelines_url = defaults.get("official_guidelines_url")
+        else:
+            defaults = {
+                "publisher": "Unknown Journal Publisher",
+                "citation_style": "IEEE",
+                "word_limit": 7500,
+                "page_limit": 10,
+                "abstract_word_limit": 250,
+                "official_guidelines_url": f"https://www.google.com/search?q={re.sub(r'[^a-zA-Z0-9+]+', '+', journal_name.strip())}+author+guidelines",
+                "required_sections": [
+                    "Abstract", "Introduction", "Related Work",
+                    "Methodology", "Results and Analysis", "Discussion", "Conclusion", "References"
+                ],
+                "abstract_requirements": "Single paragraph abstract under 250 words.",
+                "keyword_requirements": "4 to 6 keywords separated by commas.",
+                "declaration_requirements": ["Data Availability", "Conflict of Interest"],
+                "layout_requirements": "Single-column draft format"
+            }
+            v_status = "unverified_draft"
+            publisher = "Unknown Journal Publisher"
+            guidelines_url = defaults["official_guidelines_url"]
+
         proj_suffix = project_id or "global"
         profile_id = f"jp_{hashlib.md5(f'{journal_name}_{proj_suffix}'.encode()).hexdigest()[:10]}"
 
@@ -137,8 +163,8 @@ class JournalIntelligence:
             id=profile_id,
             project_id=project_id,
             journal_name=journal_name,
-            publisher=defaults.get("publisher", "Academic Publisher"),
-            official_guidelines_url=defaults.get("official_guidelines_url", f"https://www.{defaults.get('publisher', 'publisher').lower()}.org/authors/guidelines"),
+            publisher=publisher,
+            official_guidelines_url=guidelines_url,
             manuscript_type="Full Research Paper",
             citation_style=defaults.get("citation_style", "IEEE"),
             required_sections=json.dumps(defaults.get("required_sections", [])),
@@ -151,7 +177,7 @@ class JournalIntelligence:
             table_requirements="Tables must be numbered sequentially with titles positioned above.",
             declaration_requirements=json.dumps(defaults.get("declaration_requirements", [])),
             layout_requirements=defaults.get("layout_requirements", "Standard academic layout"),
-            verification_status="unverified_default",
+            verification_status=v_status,
             profile_version=1,
             retrieved_at=now_utc
         )
@@ -450,9 +476,9 @@ class JournalIntelligence:
         checks.append(ComplianceCheckResponse.model_validate(c))
 
         # 7. Guideline verification check (SRS FR-21: distinguish default profile from confirmed guidelines)
-        if profile.verification_status == "unverified_default":
+        if profile.verification_status.startswith("unverified"):
             status_guide = "warning"
-            obs_guide = "Unverified default publisher baseline"
+            obs_guide = f"Unverified baseline ({profile.verification_status})"
             exp_guide = (
                 f"Journal profile '{profile.journal_name}' is initialized from unverified publisher defaults. "
                 f"Different venues within {profile.publisher} enforce distinct author guidelines. "
@@ -493,12 +519,22 @@ class JournalIntelligence:
         else:
             score = 100.0
 
-        overall = "compliant" if failed_count == 0 and warning_count == 0 else ("non_compliant" if failed_count > 0 else "warnings_detected")
+        is_officially_confirmed = not profile.verification_status.startswith("unverified")
+        if not is_officially_confirmed:
+            overall = "unverified_profile_provisional"
+        elif failed_count > 0:
+            overall = "non_compliant"
+        elif warning_count > 0:
+            overall = "warnings_detected"
+        else:
+            overall = "compliant"
 
         return ComplianceReportResponse(
             manuscript_id=manuscript.id,
             journal_name=profile.journal_name,
             overall_status=overall,
+            profile_verification_status=profile.verification_status,
+            is_officially_confirmed=is_officially_confirmed,
             passed_count=passed_count,
             failed_count=failed_count,
             warning_count=warning_count,
