@@ -1,0 +1,603 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ResearchScribe v3.0 — GitHub-to-Research-Paper Generation & Journal Formatting System</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <!-- Header / Navigation Bar -->
+  <header class="app-header">
+    <div class="header-left">
+      <div class="logo-mark">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M4 19.5C4 18.1193 5.11929 17 6.5 17H20" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          <path d="M6.5 2H20V22H6.5C5.11929 22 4 20.8807 4 19.5V4.5C4 3.11929 5.11929 2 6.5 2Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M8 7H16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          <path d="M8 11H13" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          <circle cx="17" cy="11.5" r="1.5" fill="#10B981"/>
+        </svg>
+      </div>
+      <div class="brand-text">
+        <span class="brand-title">ResearchScribe <span class="version-tag">v3.0</span></span>
+        <span class="brand-tag">GitHub-to-Paper & Journal Formatter</span>
+      </div>
+    </div>
+
+    <!-- Active Project Switcher -->
+    <div class="header-center">
+      <div class="project-selector-wrapper">
+        <span class="project-pill-label">Project:</span>
+        <select id="project-select" class="project-select">
+          <option value="" disabled selected>Loading projects...</option>
+        </select>
+        <button id="btn-new-project" class="btn btn-secondary btn-sm" title="Create New Project">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+          New
+        </button>
+      </div>
+    </div>
+
+    <div class="header-right">
+      <!-- Mode Badge -->
+      <div class="mode-badge" id="mode-badge">
+        <span class="mode-dot"></span>
+        <span id="current-mode-label">Automatic Mode</span>
+      </div>
+
+      <!-- Journal Badge -->
+      <div class="journal-badge" id="journal-badge" title="Target Publication Venue">
+        <span id="current-journal-label">IEEE Transactions</span>
+      </div>
+
+      <!-- 1-Click Automatic Run Button -->
+      <button id="btn-auto-run" class="btn btn-primary btn-sm" title="Run 1-Click GitHub-to-Paper Pipeline (FR-13)">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
+        1-Click Auto Run
+      </button>
+
+      <button id="btn-export-modal" class="btn btn-accent btn-sm">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+        Export Draft
+      </button>
+    </div>
+  </header>
+
+  <!-- Main Application Workspace -->
+  <main class="app-layout">
+    <!-- Left Sidebar: Navigation & Navigation Tabs -->
+    <aside class="sidebar-pane">
+      <nav class="sidebar-nav">
+        <button class="nav-tab active" data-tab="manuscript">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+          <span>Manuscript</span>
+        </button>
+        <button class="nav-tab" data-tab="repository">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"></path></svg>
+          <span>Repository & Code</span>
+          <span class="badge" id="repo-files-badge">0</span>
+        </button>
+        <button class="nav-tab" data-tab="experiments">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
+          <span>Metrics Ledger</span>
+          <span class="badge" id="metrics-count-badge">0</span>
+        </button>
+        <button class="nav-tab" data-tab="guided-workflow">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
+          <span>Guided Checkpoints</span>
+        </button>
+        <button class="nav-tab" data-tab="journal">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path></svg>
+          <span>Journal Compliance</span>
+        </button>
+        <button class="nav-tab" data-tab="sources">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path></svg>
+          <span>Literature & Gaps</span>
+          <span class="badge" id="sources-count-badge">0</span>
+        </button>
+        <button class="nav-tab" data-tab="evidence">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+          <span>Evidence Passages</span>
+          <span class="badge" id="evidence-count-badge">0</span>
+        </button>
+        <button class="nav-tab" data-tab="project-settings">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+          <span>Project Settings</span>
+        </button>
+      </nav>
+
+      <!-- Section Outline List (under Manuscript tab) -->
+      <div class="outline-sidebar-section" id="outline-sidebar-section">
+        <div class="sidebar-header-row">
+          <span class="subheading">MANUSCRIPT SECTIONS</span>
+        </div>
+        <div class="section-outline-list" id="section-outline-list">
+          <!-- Populated dynamically -->
+        </div>
+      </div>
+
+      <!-- Verification Mini Dashboard -->
+      <div class="verification-summary-widget" id="verification-summary-widget">
+        <div class="widget-header">
+          <span>CITATIONS & EVIDENCE AUDIT</span>
+          <span class="metric-score" id="global-accuracy-score">--%</span>
+        </div>
+        <div class="audit-status-bars">
+          <div class="status-indicator-row supported">
+            <span class="status-chip supported">Supported</span>
+            <span class="status-count" id="count-supported">0</span>
+          </div>
+          <div class="status-indicator-row partially">
+            <span class="status-chip partially">Partially Supported</span>
+            <span class="status-count" id="count-partial">0</span>
+          </div>
+          <div class="status-indicator-row unverified">
+            <span class="status-chip unverified">Unverified</span>
+            <span class="status-count" id="count-unverified">0</span>
+          </div>
+          <div class="status-indicator-row missing">
+            <span class="status-chip missing">Citation Missing</span>
+            <span class="status-count" id="count-missing">0</span>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Center Workspace Area -->
+    <div class="content-viewport">
+      <!-- 1. MANUSCRIPT TAB -->
+      <div class="view-panel active" id="panel-manuscript">
+        <div class="manuscript-editor-container">
+          <div class="editor-top-bar">
+            <div class="section-meta-info">
+              <span class="section-badge" id="editor-section-type">Introduction</span>
+              <h2 class="section-title-heading" id="editor-section-title">1. Introduction</h2>
+            </div>
+            <div class="editor-actions">
+              <button id="btn-polish-prose" class="btn btn-secondary btn-sm" title="Improve Academic Prose (FR-15)">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>
+                Refine Prose
+              </button>
+              <button id="btn-verify-section" class="btn btn-secondary btn-sm" title="Re-evaluate Citations & Claims (FR-17)">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
+                Verify Citations
+              </button>
+              <button id="btn-generate-section" class="btn btn-primary btn-sm">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
+                Generate / Ground
+              </button>
+              <button id="btn-save-section" class="btn btn-accent btn-sm">
+                Save
+              </button>
+            </div>
+          </div>
+
+          <div class="editor-split-view">
+            <!-- Left: Manuscript Text Editor -->
+            <div class="editor-pane">
+              <textarea id="section-textarea" class="manuscript-textarea" placeholder="Section draft content will appear here. Click 'Generate / Ground' to synthesize using repository and scholarly evidence..."></textarea>
+            </div>
+
+            <!-- Right: Live Claims & Citation Provenance Drawer -->
+            <div class="provenance-drawer">
+              <div class="drawer-header">
+                <div class="drawer-title">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+                  <span>Claim Verification & Evidence (FR-16, FR-17)</span>
+                </div>
+                <span class="claims-counter" id="drawer-claims-count">0 Claims</span>
+              </div>
+              <div class="claims-list-scroll" id="claims-list-container">
+                <div class="empty-state-card">
+                  <p>Generate or verify this section to extract factual assertions and inspect supporting code lines or scholarly passages.</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 2. REPOSITORY & CODE INTELLIGENCE TAB (FR-01 through FR-05) -->
+      <div class="view-panel" id="panel-repository">
+        <div class="dashboard-container">
+          <div class="dashboard-header-card">
+            <div class="repo-info-row">
+              <div class="repo-url-display">
+                <span class="subheading">LINKED GITHUB REPOSITORY</span>
+                <h3 id="repo-url-text">https://github.com/facebookresearch/llama</h3>
+                <span class="provenance-sha" id="repo-sha-badge">Commit: HEAD</span>
+              </div>
+              <button id="btn-re-analyze-repo" class="btn btn-secondary">
+                Re-Analyze Codebase
+              </button>
+            </div>
+          </div>
+
+          <!-- Architecture & Methodology Cards -->
+          <div class="cards-grid-two">
+            <div class="info-card">
+              <div class="card-header">
+                <span class="card-title">Reconstructed Methodology (FR-05)</span>
+                <span class="status-chip supported" id="meth-status-chip">Verified</span>
+              </div>
+              <div class="card-body" id="methodology-card-body">
+                <p><strong>Problem Formulation:</strong> <span id="meth-problem-text">Loading...</span></p>
+                <p><strong>Algorithm Description:</strong> <span id="meth-algo-text">Loading...</span></p>
+                <div class="code-snippet-box">
+                  <span class="snippet-title">Extracted Mathematical Equations:</span>
+                  <pre id="meth-equations-box">Loading equations...</pre>
+                </div>
+                <div class="code-snippet-box">
+                  <span class="snippet-title">Reconstructed Pseudocode:</span>
+                  <pre id="meth-pseudo-box">Loading pseudocode...</pre>
+                </div>
+              </div>
+            </div>
+
+            <div class="info-card">
+              <div class="card-header">
+                <span class="card-title">Architecture Components (FR-04)</span>
+                <span class="badge" id="components-count-badge">0</span>
+              </div>
+              <div class="card-body">
+                <div class="components-list" id="architecture-components-list">
+                  <!-- Dynamically populated -->
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Codebase File Inventory -->
+          <div class="table-card">
+            <div class="card-header">
+              <span class="card-title">Codebase File Inventory (FR-03)</span>
+            </div>
+            <div class="table-responsive">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>File Path</th>
+                    <th>Type</th>
+                    <th>Language</th>
+                    <th>Category</th>
+                    <th>Size</th>
+                  </tr>
+                </thead>
+                <tbody id="repo-files-table-body">
+                  <!-- Dynamically populated -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 3. EXPERIMENTAL METRICS LEDGER TAB (FR-06, FR-07) -->
+      <div class="view-panel" id="panel-experiments">
+        <div class="dashboard-container">
+          <!-- Evidence Sufficiency & Consistency Card (FR-07) -->
+          <div class="info-card" id="evidence-gap-card">
+            <div class="card-header">
+              <span class="card-title">Evidence Sufficiency & Consistency Analysis (FR-07)</span>
+              <span class="metric-score" id="gap-score-badge">95% Sufficiency</span>
+            </div>
+            <div class="card-body" id="gap-report-body">
+              <div class="gap-recommendations-list" id="gap-recommendations-list">
+                <!-- Dynamically populated -->
+              </div>
+            </div>
+          </div>
+
+          <!-- Extracted Experimental Results Table (FR-06) -->
+          <div class="table-card">
+            <div class="card-header">
+              <span class="card-title">Empirical Results Ledger (FR-06)</span>
+              <span class="subheading">Traceable to CSV/Notebook Artifacts</span>
+            </div>
+            <div class="table-responsive">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Model</th>
+                    <th>Dataset</th>
+                    <th>Split</th>
+                    <th>Metric</th>
+                    <th>Value</th>
+                    <th>Random Seed</th>
+                    <th>Source Artifact</th>
+                    <th>Verification</th>
+                  </tr>
+                </thead>
+                <tbody id="metrics-table-body">
+                  <!-- Dynamically populated -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 4. GUIDED REVIEW CHECKPOINTS TAB (FR-14) -->
+      <div class="view-panel" id="panel-guided-workflow">
+        <div class="dashboard-container">
+          <div class="checkpoint-hero-banner">
+            <div class="hero-text">
+              <h2>Guided Mode: Researcher Review Checkpoints (FR-14)</h2>
+              <p>Inspect and approve intermediate inferences before section generation to maintain strict scientific oversight.</p>
+            </div>
+          </div>
+
+          <div class="checkpoints-timeline-grid" id="checkpoints-timeline-container">
+            <!-- Dynamically populated 10 checkpoints -->
+          </div>
+        </div>
+      </div>
+
+      <!-- 5. JOURNAL TEMPLATE & COMPLIANCE TAB (FR-19 through FR-25) -->
+      <div class="view-panel" id="panel-journal">
+        <div class="dashboard-container">
+          <div class="cards-grid-two">
+            <!-- Journal Profile & Template Ingestion Card -->
+            <div class="info-card">
+              <div class="card-header">
+                <span class="card-title">Journal Profile & Guidelines (FR-19, FR-21)</span>
+              </div>
+              <div class="card-body">
+                <div class="form-group">
+                  <label class="form-label">Target Journal / Conference Venue:</label>
+                  <select id="journal-profile-select" class="form-input">
+                    <option value="IEEE Transactions">IEEE Transactions (Two-column, IEEE style)</option>
+                    <option value="ACM Transactions">ACM Transactions (Single/two-column, ACM style)</option>
+                    <option value="Springer Nature">Springer Nature (Vancouver style, 1-inch margins)</option>
+                    <option value="Elsevier Pattern Recognition">Elsevier Pattern Recognition (APA style)</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Upload Official DOCX Template (FR-20):</label>
+                  <input type="file" id="template-file-input" class="form-input" accept=".docx,.doc">
+                  <button id="btn-upload-template" class="btn btn-secondary btn-sm" style="margin-top: 8px;">Upload & Inspect Template Styles</button>
+                  <div id="template-upload-status" class="status-msg"></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Compliance Audit Score Card -->
+            <div class="info-card">
+              <div class="card-header">
+                <span class="card-title">Journal Compliance Audit (FR-24)</span>
+                <span class="metric-score" id="compliance-overall-score">--%</span>
+              </div>
+              <div class="card-body">
+                <div class="compliance-summary-row">
+                  <span id="compliance-overall-badge" class="status-chip supported">Checking...</span>
+                  <button id="btn-run-compliance" class="btn btn-primary btn-sm">Re-Validate Compliance</button>
+                </div>
+                <div class="compliance-checks-list" id="compliance-checks-list">
+                  <!-- Dynamically populated -->
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 6. SOURCES & LITERATURE TAB (FR-09, FR-10, FR-11) -->
+      <div class="view-panel" id="panel-sources">
+        <div class="sources-management-view">
+          <div class="sources-toolbar">
+            <div class="search-input-group">
+              <input type="text" id="scholarly-search-input" class="form-input" placeholder="Search OpenAlex & CrossRef (e.g. 'transformer attention neural network')...">
+              <button id="btn-run-scholarly-search" class="btn btn-primary">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                Search Papers
+              </button>
+            </div>
+          </div>
+
+          <!-- Discovered Scholarly Results (if searching) -->
+          <div class="search-results-section" id="search-results-section" style="display: none;">
+            <div class="section-title-bar">
+              <span class="subheading">SCHOLARLY RETRIEVAL RESULTS</span>
+              <button id="btn-close-search" class="btn-link">Close Search</button>
+            </div>
+            <div class="results-cards-grid" id="search-results-grid"></div>
+          </div>
+
+          <!-- Research Gap Proposals Card (FR-11) -->
+          <div class="info-card" style="margin-bottom: 20px;">
+            <div class="card-header">
+              <span class="card-title">7-Dimension Novelty & Research Gap Proposals (FR-11)</span>
+              <button id="btn-refresh-gaps" class="btn btn-secondary btn-sm">Refresh Comparison</button>
+            </div>
+            <div class="card-body" id="research-gaps-container">
+              <!-- Dynamically populated -->
+            </div>
+          </div>
+
+          <!-- Saved Project Sources -->
+          <div class="saved-sources-section">
+            <div class="section-title-bar">
+              <span class="subheading">PROJECT CITATION LIBRARY</span>
+            </div>
+            <div class="table-responsive">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Key</th>
+                    <th>Title</th>
+                    <th>Authors</th>
+                    <th>Year</th>
+                    <th>Venue</th>
+                    <th>Verified</th>
+                  </tr>
+                </thead>
+                <tbody id="sources-table-body">
+                  <!-- Dynamically populated -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 7. EVIDENCE PASSAGES TAB (FR-16) -->
+      <div class="view-panel" id="panel-evidence">
+        <div class="evidence-management-view">
+          <div class="section-title-bar">
+            <span class="subheading">MULTI-MODAL EVIDENCE REPOSITORY</span>
+            <span class="counter-text" id="evidence-stats-text">0 items</span>
+          </div>
+          <div class="evidence-cards-stream" id="evidence-cards-container">
+            <!-- Dynamically populated -->
+          </div>
+        </div>
+      </div>
+
+      <!-- 8. PROJECT SETTINGS TAB -->
+      <div class="view-panel" id="panel-project-settings">
+        <div class="settings-form-container">
+          <h2 class="settings-title">Research Project & Provenance Settings</h2>
+          <form id="project-settings-form" class="settings-form">
+            <div class="form-group">
+              <label class="form-label">Working Manuscript Title</label>
+              <input type="text" id="setting-title" class="form-input" required>
+            </div>
+            <div class="form-group">
+              <label class="form-label">GitHub Repository URL (FR-01)</label>
+              <input type="text" id="setting-repo-url" class="form-input" placeholder="https://github.com/owner/repo">
+            </div>
+            <div class="form-row-two">
+              <div class="form-group">
+                <label class="form-label">Operating Generation Mode (FR-13, FR-14)</label>
+                <select id="setting-gen-mode" class="form-input">
+                  <option value="automatic">Automatic Mode (One-Click End-to-End)</option>
+                  <option value="guided">Guided Mode (Researcher Review Checkpoints)</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Citation & Bibliographic Style (FR-19)</label>
+                <select id="setting-citation-style" class="form-input">
+                  <option value="IEEE">IEEE (Numbered Bracket [1])</option>
+                  <option value="APA">APA 7th (Author, Year)</option>
+                  <option value="Harvard">Harvard (Author Year)</option>
+                  <option value="Vancouver">Vancouver (Numbered)</option>
+                  <option value="Chicago">Chicago (Author 2020)</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Research Topic & Domain Scope</label>
+              <textarea id="setting-topic" class="form-textarea" rows="2"></textarea>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Specific Research Objectives</label>
+              <textarea id="setting-objectives" class="form-textarea" rows="2"></textarea>
+            </div>
+            <div class="form-actions-bar">
+              <button type="submit" class="btn btn-primary">Save Settings</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- Modals -->
+  <!-- 1. Generate Section Modal -->
+  <div class="modal-backdrop" id="modal-generate" style="display: none;">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3 class="modal-title">Grounded Section Generation</h3>
+        <button class="modal-close" id="btn-close-gen-modal">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="modal-description">Synthesizes academic prose strictly grounded in repository methodology and selected literature sources.</p>
+        <div class="form-group">
+          <label class="form-label">Section Guidance / Focus:</label>
+          <textarea id="gen-instructions" class="form-textarea" rows="2" placeholder="e.g., Emphasize the multi-scale cross-attention mechanism and empirical F1 gains..."></textarea>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Word Target:</label>
+          <input type="number" id="gen-word-limit" class="form-input" value="600" min="150" max="2500">
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="btn-cancel-gen">Cancel</button>
+        <button class="btn btn-primary" id="btn-confirm-generate">Generate Draft</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 2. Prose Polish Modal -->
+  <div class="modal-backdrop" id="modal-polish" style="display: none;">
+    <div class="modal-dialog modal-lg">
+      <div class="modal-header">
+        <h3 class="modal-title">Academic Prose Refinement (FR-15)</h3>
+        <button class="modal-close" id="btn-close-polish-modal">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="polish-modes-row" id="polish-mode-options">
+          <span class="pill active" data-mode="academic_tone">Academic Tone</span>
+          <span class="pill" data-mode="clarity">Clarity & Flow</span>
+          <span class="pill" data-mode="conciseness">Conciseness</span>
+          <span class="pill" data-mode="coherence">Transitions</span>
+        </div>
+        <div class="diff-split-container">
+          <div class="diff-pane">
+            <span class="diff-label">Original Text</span>
+            <div id="diff-original-view" class="diff-view-box"></div>
+          </div>
+          <div class="diff-pane">
+            <span class="diff-label">Refined Revision</span>
+            <div id="diff-revised-view" class="diff-view-box"></div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="btn-cancel-polish">Discard</button>
+        <button class="btn btn-secondary" id="btn-re-polish">Re-evaluate</button>
+        <button class="btn btn-accent" id="btn-accept-polish">Accept Revision</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 3. Export Modal -->
+  <div class="modal-backdrop" id="modal-export" style="display: none;">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3 class="modal-title">Export Research Manuscript (FR-23, FR-26)</h3>
+        <button class="modal-close" id="btn-close-export-modal">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label class="form-label">Export Format:</label>
+          <select id="export-format-select" class="form-input">
+            <option value="docx">Microsoft Word (.docx) — Template-Preserved</option>
+            <option value="markdown">Markdown (.md)</option>
+            <option value="bibtex">BibTeX References (.bib)</option>
+          </select>
+        </div>
+        <div class="form-group checkbox-group">
+          <label>
+            <input type="checkbox" id="export-include-appendix" checked>
+            Include Evidence & Citation Provenance Audit Table
+          </label>
+        </div>
+        <div id="export-download-link-box" style="display: none; margin-top: 15px;">
+          <a id="export-download-btn" class="btn btn-accent btn-block" href="" download>Download Document</a>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="btn-cancel-export">Close</button>
+        <button class="btn btn-primary" id="btn-confirm-export">Generate Export</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
