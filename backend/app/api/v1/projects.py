@@ -44,7 +44,7 @@ def create_project(payload: ProjectCreate, db: Session = Depends(get_db)):
     # If GitHub repository URL provided, ingest it (FR-01, FR-02)
     if payload.repository_url:
         try:
-            allow_unverified = bool(payload.file_manifest)
+            allow_unverified = bool(payload.allow_unverified_commit)
             repo = repository_analyzer.acquire_repository(
                 db=db,
                 project_id=project_id,

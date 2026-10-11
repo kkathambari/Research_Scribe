@@ -46,7 +46,8 @@ class ManuscriptExporterService:
                 citation_style,
                 include_verification_appendix,
                 template_path,
-                abstract=manuscript.get("abstract", "")
+                abstract=manuscript.get("abstract", ""),
+                target_journal=manuscript.get("target_journal", "")
             )
             return out_path
 
@@ -74,7 +75,8 @@ class ManuscriptExporterService:
         citation_style: str,
         include_verification_appendix: bool,
         template_path: Optional[str] = None,
-        abstract: str = ""
+        abstract: str = "",
+        target_journal: str = ""
     ):
         """FR-23: Template-preserving DOCX assembly retaining fonts, margins, headers, and footers."""
         is_template_loaded = False
@@ -92,37 +94,48 @@ class ManuscriptExporterService:
             sec_by_type = {s.get("section_type", "").lower(): s for s in sections}
             replaced_types = set()
 
+            def _replace_in_paragraph_preserving_runs(p, pattern: str, replacement: str) -> bool:
+                """Replaces pattern in paragraph while preserving individual run styles and formatting."""
+                if not p.text or not re.search(pattern, p.text, flags=re.IGNORECASE):
+                    return False
+                # If pattern exists inside a single run, replace strictly within that run to retain formatting
+                for r in p.runs:
+                    if re.search(pattern, r.text, flags=re.IGNORECASE):
+                        r.text = re.sub(pattern, replacement, r.text, flags=re.IGNORECASE)
+                        return True
+                # If placeholder spans multiple runs, replace text while retaining first run's font/style
+                full_text = p.text
+                new_full = re.sub(pattern, replacement, full_text, flags=re.IGNORECASE)
+                if p.runs:
+                    p.runs[0].text = new_full
+                    for r in p.runs[1:]:
+                        r.text = ""
+                else:
+                    p.text = new_full
+                return True
+
             def _sub_placeholders(p):
                 if not p.text:
                     return
-                p_text_lower = p.text.lower()
-                if "{{title}}" in p_text_lower:
-                    p.text = re.sub(r'\{\{TITLE\}\}', title, p.text, flags=re.IGNORECASE)
-                elif p.text.strip().lower() in ["[paper title]", "title of paper"]:
-                    p.text = title
 
-                if "{{abstract}}" in p_text_lower:
-                    abs_text = sec_by_type.get("abstract", {}).get("content") or abstract or "This manuscript presents an evidence-grounded investigation."
-                    p.text = re.sub(r'\{\{ABSTRACT\}\}', abs_text, p.text, flags=re.IGNORECASE)
-                    replaced_types.add("abstract")
-                elif p.text.strip().lower() in ["[abstract]"]:
-                    abs_text = sec_by_type.get("abstract", {}).get("content") or abstract or "This manuscript presents an evidence-grounded investigation."
-                    p.text = abs_text
+                _replace_in_paragraph_preserving_runs(p, r'\{\{TITLE\}\}|\[paper title\]|\[title of paper\]', title)
+
+                abs_text = sec_by_type.get("abstract", {}).get("content") or abstract or "This manuscript presents an evidence-grounded investigation."
+                if _replace_in_paragraph_preserving_runs(p, r'\{\{ABSTRACT\}\}|\[abstract\]', abs_text):
                     replaced_types.add("abstract")
 
-                if "{{authors}}" in p_text_lower:
-                    p.text = re.sub(r'\{\{AUTHORS\}\}', "Research Author(s)", p.text, flags=re.IGNORECASE)
-                elif p.text.strip().lower() in ["[author]", "[authors]"]:
-                    p.text = "Research Author(s)"
+                _replace_in_paragraph_preserving_runs(p, r'\{\{AUTHORS\}\}|\[author\]|\[authors\]|\[author names\]', "Research Author(s)")
+                _replace_in_paragraph_preserving_runs(p, r'\{\{TARGET_JOURNAL\}\}|\{\{JOURNAL\}\}|\[target publication\]|\[journal\]', target_journal or "IEEE Transactions")
 
-                if "{{introduction}}" in p_text_lower or p.text.strip().lower() == "[introduction]":
-                    intro_sec = sec_by_type.get("introduction")
-                    if intro_sec:
-                        p.text = re.sub(r'\{\{INTRODUCTION\}\}', intro_sec.get("content", ""), p.text, flags=re.IGNORECASE) if "{{introduction}}" in p_text_lower else intro_sec.get("content", "")
-                        replaced_types.add("introduction")
+                intro_sec = sec_by_type.get("introduction")
+                if intro_sec and _replace_in_paragraph_preserving_runs(p, r'\{\{INTRODUCTION\}\}|\[introduction\]', intro_sec.get("content", "")):
+                    replaced_types.add("introduction")
 
-                if "{{keywords}}" in p_text_lower or p.text.strip().lower() == "[keywords]":
-                    p.text = re.sub(r'\{\{KEYWORDS\}\}', "Keywords: research automation; repository analysis; evidence provenance; reproducible science", p.text, flags=re.IGNORECASE) if "{{keywords}}" in p_text_lower else "Keywords: research automation; repository analysis; evidence provenance; reproducible science"
+                meth_sec = sec_by_type.get("methodology")
+                if meth_sec and _replace_in_paragraph_preserving_runs(p, r'\{\{METHODOLOGY\}\}|\[methodology\]', meth_sec.get("content", "")):
+                    replaced_types.add("methodology")
+
+                _replace_in_paragraph_preserving_runs(p, r'\{\{KEYWORDS\}\}|\[keywords\]', "Keywords: research automation; repository analysis; evidence provenance; reproducible science")
 
             # 1. Main body paragraphs
             for p in doc.paragraphs:

@@ -74,6 +74,7 @@ def test_v3_repository_ingestion_and_intelligence(client: TestClient):
         "target_publication": "IEEE Transactions",
         "citation_style": "IEEE",
         "generation_mode": "automatic",
+        "allow_unverified_commit": True,
         "file_manifest": SAMPLE_ML_MANIFEST
     })
     assert submit_resp.status_code == 200
@@ -189,7 +190,8 @@ def test_v3_novelty_and_guided_workflow(client: TestClient):
         "file_manifest": SAMPLE_ML_MANIFEST,
         "research_topic": "Generative language models with verifiable source citations",
         "target_publication": "IEEE Transactions",
-        "generation_mode": "guided"
+        "generation_mode": "guided",
+        "allow_unverified_commit": True
     })
     assert proj_resp.status_code == 200
     proj = proj_resp.json()

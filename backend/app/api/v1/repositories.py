@@ -1,3 +1,4 @@
+import uuid
 import hashlib
 import json
 from pathlib import Path
@@ -33,7 +34,7 @@ def submit_repository(
     if not project_id:
         # Create a new project automatically if none provided
         proj = Project(
-            id=f"proj_{hashlib.md5(data.repository_url.encode()).hexdigest()[:10]}",
+            id=str(uuid.uuid4()),
             title=data.title or f"Empirical Study: {data.repository_url.split('/')[-1]}",
             repository_url=data.repository_url,
             research_topic=data.research_topic or "Automated Software & Model Evaluation",
@@ -45,7 +46,7 @@ def submit_repository(
         db.commit()
         project_id = proj.id
     try:
-        allow_unverified = data.allow_unverified_commit or bool(data.file_manifest)
+        allow_unverified = bool(data.allow_unverified_commit)
         repo = repository_analyzer.acquire_repository(
             db,
             project_id=project_id,

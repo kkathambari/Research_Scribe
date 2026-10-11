@@ -2,7 +2,7 @@ import hashlib
 import json
 import logging
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 from sqlalchemy.orm import Session
 
 from app.models.source import Source
@@ -32,6 +32,32 @@ class NoveltyAnalyzer:
         ("metrics", "Evaluation Metrics & Numerical Rigor"),
         ("limitations", "Handled Limitations & Threats to Validity")
     ]
+
+    def _find_targeted_source_evidence(
+        self,
+        sources: List[Source],
+        keywords: List[str]
+    ) -> Tuple[Optional[Source], Optional[str]]:
+        """
+        Scans retrieved sources and finds the first sentence that specifically
+        matches the given topical keywords. Prioritizes abstract passages over titles.
+        Returns (matched_source, matched_sentence), or (None, None) if no match.
+        """
+        # 1. Search abstract sentences first
+        for s in sources:
+            if s.abstract:
+                sentences = [sent.strip() for sent in re.split(r'(?<=[.!?])\s+', s.abstract) if sent.strip()]
+                for sent in sentences:
+                    sent_lower = sent.lower()
+                    if any(kw.lower() in sent_lower for kw in keywords):
+                        return s, sent
+
+        # 2. Fall back to title if abstract has no match
+        for s in sources:
+            if any(kw.lower() in s.title.lower() for kw in keywords):
+                return s, s.title
+
+        return None, None
 
     def _extract_key_phrases(self, text: Optional[str], max_terms: int = 4) -> List[str]:
         if not text:
@@ -89,43 +115,31 @@ class NoveltyAnalyzer:
         topic_summary = ", ".join(source_topics) if source_topics else (primary_source.title[:50] if primary_source else "")
 
         # 1. Problem Formulation & Scope
-        supporting_passages = [s.abstract[:200] for s in sources if s.abstract][:2]
-        comp_limitation = f"Comparison is based on abstracts of {len(sources)} retrieved paper(s). Full-text ablation verification and author confirmation are required."
-
-        if has_sources and primary_source:
-            gap_text = (
-                f"Retrieved literature ('{primary_source.title[:65]}') investigates {topic_summary or 'domain principles'}. "
-                f"Whether this published formulation covers the specific execution scope of the repository remains a research hypothesis requiring researcher validation."
-            )
-            rationale_text = (
-                f"Analysis compares published scope in '{primary_source.title[:50]}' with {len(components)} "
-                f"identified code components ({', '.join(comp_names[:3]) or 'modules'})."
-            )
-            contrib_text = (
-                f"Hypothesized Contribution (Requires Review): Concrete software realization of {', '.join(comp_names[:3]) or 'core modules'} "
-                f"grounded in repository commit {snapshot.commit_sha if snapshot else 'HEAD'}."
-            )
+        src_prob, pass_prob = self._find_targeted_source_evidence(
+            sources, ["problem", "challenge", "objective", "task", "formulation", "scope", "propose", "investigate", "framework", "focus"]
+        )
+        if src_prob and pass_prob:
             g_prob = ResearchGapProposal(
                 dimension="Problem Formulation & Scope",
-                identified_gap=gap_text,
-                comparison_rationale=rationale_text,
-                proposed_contribution=contrib_text,
-                source_ids=source_ids[:1],
-                supporting_passages=supporting_passages,
-                comparison_limitations=comp_limitation,
-                direct_support=supporting_passages[0] if supporting_passages else f"Direct metadata from '{primary_source.title}'",
+                identified_gap=f"Retrieved literature ('{src_prob.title[:65]}') states: \"{pass_prob[:120]}\". Whether this published formulation covers the specific execution scope of the repository remains a research hypothesis requiring researcher validation.",
+                comparison_rationale=f"Analysis compares scope in '{src_prob.title[:50]}' against {len(components)} identified code components ({', '.join(comp_names[:3]) or 'modules'}).",
+                proposed_contribution=f"Hypothesized Contribution (Requires Review): Concrete software realization of {', '.join(comp_names[:3]) or 'core modules'} grounded in repository commit {snapshot.commit_sha if snapshot else 'HEAD'}.",
+                source_ids=[src_prob.id],
+                supporting_passages=[pass_prob],
+                comparison_limitations=f"Comparison is based on retrieved passage from '{src_prob.title}'. Full-text ablation verification and author confirmation are required.",
+                direct_support=f"Source '{src_prob.title}': \"{pass_prob}\"",
                 inferred_extrapolation="Inferred hypothesis: repository code expands executable scope beyond published conceptual description.",
                 status="hypothesis_requiring_review"
             )
         else:
             g_prob = ResearchGapProposal(
                 dimension="Problem Formulation & Scope",
-                identified_gap="Comparative literature baseline has not been ingested for this project.",
-                comparison_rationale="Novelty claims cannot be independently verified until related peer-reviewed publications are retrieved.",
-                proposed_contribution="Insufficient Evidence: Comparative novelty cannot be established without retrieved literature baseline.",
+                identified_gap="Retrieved literature does not contain explicit discussion of problem formulation or scope relevant to this repository.",
+                comparison_rationale="Novelty claims cannot be independently verified without literature addressing this specific dimension.",
+                proposed_contribution="Insufficient Evidence: Comparative problem formulation baseline absent in retrieved literature.",
                 source_ids=[],
                 supporting_passages=[],
-                comparison_limitations="Zero literature ingested; comparative baseline absent.",
+                comparison_limitations="No literature passage directly supports a problem formulation comparison.",
                 direct_support=None,
                 inferred_extrapolation=None,
                 status="insufficient_evidence"
@@ -135,24 +149,19 @@ class NoveltyAnalyzer:
         # 2. Model Architecture & Modularity
         top_models = [c.name for c in components if c.component_type == "model"]
         arch_name = top_models[0] if top_models else (comp_names[0] if comp_names else "Core Architecture")
-        if has_sources and primary_source:
-            arch_gap = (
-                f"Prior architectures documented in '{primary_source.title[:50]}' define algorithmic structures for {topic_summary or 'domain tasks'}. "
-                f"A direct architectural equivalence with repository components ({', '.join(comp_names[:4]) or 'modular units'}) has not been formally verified."
-            )
-            arch_rationale = (
-                f"Contrasts documented architecture in '{primary_source.title[:45]}' against AST-identified modular components: {', '.join(comp_names[:4]) or 'modules'}."
-            )
-            arch_contrib = f"Hypothesized Contribution (Requires Review): Modular architecture implementing {arch_name} with explicit AST boundaries."
+        src_arch, pass_arch = self._find_targeted_source_evidence(
+            sources, ["architecture", "model", "layer", "transformer", "neural", "module", "component", "network", "encoder", "decoder", "attention"]
+        )
+        if src_arch and pass_arch:
             g_arch = ResearchGapProposal(
                 dimension="Model Architecture & Modularity",
-                identified_gap=arch_gap,
-                comparison_rationale=arch_rationale,
-                proposed_contribution=arch_contrib,
-                source_ids=source_ids[:2],
-                supporting_passages=supporting_passages,
-                comparison_limitations=comp_limitation,
-                direct_support=supporting_passages[0] if supporting_passages else f"Direct architectural description in '{primary_source.title}'",
+                identified_gap=f"Prior architecture in '{src_arch.title[:50]}' states: \"{pass_arch[:120]}\". A direct structural equivalence with repository components ({', '.join(comp_names[:4]) or 'modular units'}) has not been formally proven.",
+                comparison_rationale=f"Contrasts documented architecture in '{src_arch.title[:45]}' against AST-identified modular components: {', '.join(comp_names[:4]) or 'modules'}.",
+                proposed_contribution=f"Hypothesized Contribution (Requires Review): Modular architecture implementing {arch_name} with explicit AST boundaries.",
+                source_ids=[src_arch.id],
+                supporting_passages=[pass_arch],
+                comparison_limitations=f"Comparison is based on retrieved passage from '{src_arch.title}'.",
+                direct_support=f"Source '{src_arch.title}': \"{pass_arch}\"",
                 inferred_extrapolation=f"Inferred hypothesis: repository implements modular architecture {arch_name} not directly specified in cited paper.",
                 status="hypothesis_requiring_review"
             )
@@ -164,7 +173,7 @@ class NoveltyAnalyzer:
                 proposed_contribution="Insufficient Evidence: Baseline model architectures not available for comparative alignment.",
                 source_ids=[],
                 supporting_passages=[],
-                comparison_limitations="No literature ingested.",
+                comparison_limitations="No literature passage directly discusses baseline model architectures.",
                 direct_support=None,
                 inferred_extrapolation=None,
                 status="insufficient_evidence"
@@ -174,20 +183,19 @@ class NoveltyAnalyzer:
         # 3. Optimization & Core Algorithms
         train_comps = [c.name for c in components if "train" in c.name.lower() or "optim" in c.name.lower()]
         algo_desc = methodology.algorithm_description if methodology else "execution routines"
-        if has_sources and primary_source:
-            algo_gap = (
-                f"Algorithmic routines in retrieved literature ({source_titles[0][:50]}) "
-                f"and repository code ({algo_desc[:80]}) require comparative parameter alignment to verify novel optimization characteristics."
-            )
+        src_algo, pass_algo = self._find_targeted_source_evidence(
+            sources, ["algorithm", "optimization", "optimizer", "loss", "training", "convergence", "gradient", "stochastic", "backpropagation", "learning rate", "fit", "step"]
+        )
+        if src_algo and pass_algo:
             g_algo = ResearchGapProposal(
                 dimension="Optimization & Core Algorithms",
-                identified_gap=algo_gap,
+                identified_gap=f"Algorithmic routines cited in '{src_algo.title[:50]}' describe: \"{pass_algo[:120]}\". Parameter alignment against repository execution ({algo_desc[:80]}) is required to substantiate optimization novelty.",
                 comparison_rationale=f"Repository implementation defines concrete execution logic: {algo_desc[:120]}.",
                 proposed_contribution=f"Hypothesized Contribution (Requires Review): Execution flow linking optimization operations to concrete code functions ({', '.join(train_comps[:2]) or 'execution pipeline'}).",
-                source_ids=source_ids[:1],
-                supporting_passages=supporting_passages,
-                comparison_limitations=comp_limitation,
-                direct_support=supporting_passages[0] if supporting_passages else f"Algorithmic formulation in '{primary_source.title}'",
+                source_ids=[src_algo.id],
+                supporting_passages=[pass_algo],
+                comparison_limitations=f"Comparison is based on retrieved passage from '{src_algo.title}'.",
+                direct_support=f"Source '{src_algo.title}': \"{pass_algo}\"",
                 inferred_extrapolation="Inferred hypothesis: repository code optimizations provide efficiency gains beyond cited algorithmic description.",
                 status="hypothesis_requiring_review"
             )
@@ -195,11 +203,11 @@ class NoveltyAnalyzer:
             g_algo = ResearchGapProposal(
                 dimension="Optimization & Core Algorithms",
                 identified_gap="Algorithmic novelty cannot be determined without comparative literature.",
-                comparison_rationale="Baseline algorithms have not been retrieved.",
+                comparison_rationale="Baseline algorithms have not been retrieved in literature.",
                 proposed_contribution="Insufficient Evidence: Comparative algorithmic baseline absent.",
                 source_ids=[],
                 supporting_passages=[],
-                comparison_limitations="No literature ingested.",
+                comparison_limitations="No literature passage addresses algorithmic formulations.",
                 direct_support=None,
                 inferred_extrapolation=None,
                 status="insufficient_evidence"
@@ -208,19 +216,19 @@ class NoveltyAnalyzer:
 
         # 4. Dataset Provenance & Quality
         data_comps = [c.name for c in components if c.component_type == "data_pipeline" or "data" in c.name.lower()]
-        if has_sources and primary_source:
+        src_data, pass_data = self._find_targeted_source_evidence(
+            sources, ["dataset", "corpus", "data", "benchmark", "split", "annotation", "preprocessing", "token", "sample", "collection", "ingestion"]
+        )
+        if src_data and pass_data:
             g_data = ResearchGapProposal(
                 dimension="Dataset Provenance & Quality",
-                identified_gap=(
-                    f"Data handling procedures cited in literature ({source_titles[0][:50]}) "
-                    f"must be compared against repository data pipeline structures ({', '.join(data_comps[:2]) or 'data handlers'})."
-                ),
+                identified_gap=f"Data procedures in literature ('{src_data.title[:50]}') describe: \"{pass_data[:120]}\". Comparison against repository data pipeline ({', '.join(data_comps[:2]) or 'data handlers'}) requires validation.",
                 comparison_rationale=f"Repository code documents data preprocessing structures ({', '.join(data_comps[:2]) or 'data ingestion handlers'}).",
                 proposed_contribution="Hypothesized Contribution (Requires Review): Dataset ingestion and split documentation establishing repeatable data provenance.",
-                source_ids=source_ids[:2],
-                supporting_passages=supporting_passages,
-                comparison_limitations=comp_limitation,
-                direct_support=supporting_passages[0] if supporting_passages else f"Dataset description in '{primary_source.title}'",
+                source_ids=[src_data.id],
+                supporting_passages=[pass_data],
+                comparison_limitations=f"Comparison is based on retrieved passage from '{src_data.title}'.",
+                direct_support=f"Source '{src_data.title}': \"{pass_data}\"",
                 inferred_extrapolation="Inferred hypothesis: repository preprocessing artifacts provide reproducible data splits not documented in literature.",
                 status="hypothesis_requiring_review"
             )
@@ -232,7 +240,7 @@ class NoveltyAnalyzer:
                 proposed_contribution="Insufficient Evidence: Literature dataset baselines not available.",
                 source_ids=[],
                 supporting_passages=[],
-                comparison_limitations="No literature ingested.",
+                comparison_limitations="No literature passage discusses dataset provenance or splits.",
                 direct_support=None,
                 inferred_extrapolation=None,
                 status="insufficient_evidence"
@@ -241,32 +249,20 @@ class NoveltyAnalyzer:
 
         # 5. Evaluation Setup & Baselines
         eval_comps = [c.name for c in components if c.component_type == "evaluation" or "eval" in c.name.lower()]
-        if has_results and has_sources:
+        src_eval, pass_eval = self._find_targeted_source_evidence(
+            sources, ["baseline", "evaluation", "setup", "comparison", "experiment", "benchmark", "test", "hardware", "hyperparameter", "protocol"]
+        )
+        if src_eval and pass_eval:
             g_eval = ResearchGapProposal(
                 dimension="Evaluation Setup & Baselines",
-                identified_gap=(
-                    f"Baseline evaluations in literature and repository metrics across {len(results)} records require controlled cross-validation under identical splits and hardware."
-                ),
-                comparison_rationale=f"Extracted evaluation artifacts record specific splits and seed settings across {len(results)} metrics.",
+                identified_gap=f"Literature baseline setup in '{src_eval.title[:50]}' notes: \"{pass_eval[:120]}\". Evaluation against repository experimental configuration requires cross-validation under identical splits.",
+                comparison_rationale=f"Evaluations in literature compared against repository code ({', '.join(eval_comps[:2]) or 'evaluation modules'}).",
                 proposed_contribution="Hypothesized Contribution (Requires Review): Comparative evaluation framework using explicit split assignments and seed controls.",
-                source_ids=source_ids[:2],
-                supporting_passages=supporting_passages,
-                comparison_limitations="Repository metrics are self-reported; comparative replication is pending.",
-                direct_support=supporting_passages[0] if supporting_passages else "Evaluation baselines in literature",
+                source_ids=[src_eval.id],
+                supporting_passages=[pass_eval],
+                comparison_limitations=f"Comparison is based on retrieved passage from '{src_eval.title}'.",
+                direct_support=f"Source '{src_eval.title}': \"{pass_eval}\"",
                 inferred_extrapolation="Inferred hypothesis: repository evaluations provide controlled hardware benchmarks across reported baselines.",
-                status="hypothesis_requiring_review"
-            )
-        elif has_sources:
-            g_eval = ResearchGapProposal(
-                dimension="Evaluation Setup & Baselines",
-                identified_gap="Empirical benchmarking metrics were not identified in repository artifacts.",
-                comparison_rationale="No benchmark CSV, JSON, or log files were extracted from the codebase.",
-                proposed_contribution="Hypothesized Contribution (Requires Review): Evaluation routines in code; execution artifacts required to establish empirical baseline.",
-                source_ids=source_ids[:1],
-                supporting_passages=supporting_passages,
-                comparison_limitations="Zero empirical artifacts detected in repository.",
-                direct_support=supporting_passages[0] if supporting_passages else "Evaluation baselines in literature",
-                inferred_extrapolation="Inferred gap: repository defines evaluation code but lacks logged benchmark artifacts.",
                 status="hypothesis_requiring_review"
             )
         else:
@@ -277,7 +273,7 @@ class NoveltyAnalyzer:
                 proposed_contribution="Insufficient Evidence: Comparative baselines unavailable.",
                 source_ids=[],
                 supporting_passages=[],
-                comparison_limitations="Zero literature ingested.",
+                comparison_limitations="No literature passage addresses evaluation setups or baselines.",
                 direct_support=None,
                 inferred_extrapolation=None,
                 status="insufficient_evidence"
@@ -285,31 +281,20 @@ class NoveltyAnalyzer:
         proposals.append(g_eval)
 
         # 6. Evaluation Metrics & Numerical Rigor
-        if has_results and has_sources:
-            metric_names = list(set(r.metric_name for r in results))
+        src_metrics, pass_metrics = self._find_targeted_source_evidence(
+            sources, ["metric", "accuracy", "f1", "bleu", "rouge", "loss", "score", "performance", "speed", "throughput", "latency", "statist", "error"]
+        )
+        if src_metrics and pass_metrics:
             g_metrics = ResearchGapProposal(
                 dimension="Evaluation Metrics & Numerical Rigor",
-                identified_gap="Extracted numerical results represent internal repository logs; statistical significance tests against baseline papers have not been independently performed.",
-                comparison_rationale=f"Extracted {len(results)} distinct result entries across metrics: {', '.join(metric_names[:3])}.",
+                identified_gap=f"Published evaluation in '{src_metrics.title[:50]}' reports: \"{pass_metrics[:120]}\". Internal repository logs require statistical significance tests against baseline metrics.",
+                comparison_rationale=f"Contrasts numerical metrics in '{src_metrics.title[:45]}' with repository empirical evidence ledger.",
                 proposed_contribution="Hypothesized Contribution (Requires Review): Experimental evidence ledger linking every metric to its source file and row location.",
-                source_ids=source_ids[:1],
-                supporting_passages=supporting_passages,
-                comparison_limitations="Independent statistical significance has not been demonstrated.",
-                direct_support=supporting_passages[0] if supporting_passages else "Published evaluation metrics in literature",
+                source_ids=[src_metrics.id],
+                supporting_passages=[pass_metrics],
+                comparison_limitations=f"Comparison is based on retrieved passage from '{src_metrics.title}'.",
+                direct_support=f"Source '{src_metrics.title}': \"{pass_metrics}\"",
                 inferred_extrapolation="Inferred hypothesis: repository metrics provide fine-grained telemetry not reported in publications.",
-                status="hypothesis_requiring_review"
-            )
-        elif has_sources:
-            g_metrics = ResearchGapProposal(
-                dimension="Evaluation Metrics & Numerical Rigor",
-                identified_gap="No numerical results detected in repository; quantitative claims cannot be substantiated without experimental artifacts.",
-                comparison_rationale="Scientific integrity requires withholding performance claims until empirical logs are provided.",
-                proposed_contribution="Hypothesized Contribution (Requires Review): Flagged evidence insufficiency in experimental ledger to prevent unverified claims.",
-                source_ids=source_ids[:1],
-                supporting_passages=supporting_passages,
-                comparison_limitations="No numerical evidence available in repository files.",
-                direct_support=supporting_passages[0] if supporting_passages else "Metrics reported in literature",
-                inferred_extrapolation="Inferred gap: literature reports metrics but repository contains zero empirical logs.",
                 status="hypothesis_requiring_review"
             )
         else:
@@ -320,7 +305,7 @@ class NoveltyAnalyzer:
                 proposed_contribution="Insufficient Evidence: No published literature metrics for comparison.",
                 source_ids=[],
                 supporting_passages=[],
-                comparison_limitations="Zero literature ingested.",
+                comparison_limitations="No literature passage discusses evaluation metrics or quantitative scores.",
                 direct_support=None,
                 inferred_extrapolation=None,
                 status="insufficient_evidence"
@@ -328,16 +313,19 @@ class NoveltyAnalyzer:
         proposals.append(g_metrics)
 
         # 7. Handled Limitations & Threats to Validity
-        if has_sources:
+        src_limits, pass_limits = self._find_targeted_source_evidence(
+            sources, ["limitation", "threat", "validity", "bias", "failure", "constraint", "bottleneck", "assumption", "vulnerability", "robust", "degradation", "drawback"]
+        )
+        if src_limits and pass_limits:
             g_limits = ResearchGapProposal(
                 dimension="Handled Limitations & Threats to Validity",
-                identified_gap="Threats to validity include potential distribution shift, unreproduced random seeds, and unverified publisher guideline assumptions.",
+                identified_gap=f"Literature discusses constraints in '{src_limits.title[:50]}': \"{pass_limits[:120]}\". Potential distribution shifts and unreproduced random seeds remain research threats to validity.",
                 comparison_rationale="Our framework provides explicit claim-to-evidence corroboration and journal guideline compliance audits.",
                 proposed_contribution="Hypothesized Contribution (Requires Review): Comprehensive limitation analysis identifying evidence gaps, seed omissions, and verification constraints.",
-                source_ids=source_ids,
-                supporting_passages=supporting_passages,
-                comparison_limitations="Threats to validity analysis is static and requires domain specialist appraisal.",
-                direct_support=supporting_passages[0] if supporting_passages else "Scope of literature",
+                source_ids=[src_limits.id],
+                supporting_passages=[pass_limits],
+                comparison_limitations=f"Comparison is based on retrieved passage from '{src_limits.title}'.",
+                direct_support=f"Source '{src_limits.title}': \"{pass_limits}\"",
                 inferred_extrapolation="Inferred hypothesis: repository mitigates threats to validity through automated audit checks.",
                 status="hypothesis_requiring_review"
             )
@@ -345,11 +333,11 @@ class NoveltyAnalyzer:
             g_limits = ResearchGapProposal(
                 dimension="Handled Limitations & Threats to Validity",
                 identified_gap="Limitations cannot be evaluated against external literature.",
-                comparison_rationale="No literature ingested.",
+                comparison_rationale="No literature passage discusses limitations or threats to validity.",
                 proposed_contribution="Insufficient Evidence: External literature constraints absent.",
                 source_ids=[],
                 supporting_passages=[],
-                comparison_limitations="Zero literature ingested.",
+                comparison_limitations="No literature passage addresses limitations or failure modes.",
                 direct_support=None,
                 inferred_extrapolation=None,
                 status="insufficient_evidence"

@@ -20,10 +20,12 @@ from app.models.source import Source
 
 def test_acceptance_1_invalid_supplied_sha_rejected(client: TestClient):
     """
-    Audit 4 Critical 1:
-    Verifies that a caller-supplied resolved_commit_sha is NOT trusted blindly.
-    Submitting an unverified or nonexistent commit SHA fails closed with a 400 error.
+    Audit 5 Critical 1 & High 2:
+    - Rejects nonexistent or unverified commit SHA by default.
+    - Supplying a file manifest does NOT bypass verification; request without allow_unverified_commit fails closed.
+    - Rejects malformed commit SHAs (non-hex, < 7 chars, > 40 chars).
     """
+    # Case A: Nonexistent SHA without unverified override
     resp = client.post("/api/v1/repositories/submit", json={
         "repository_url": "https://github.com/karpathy/nanoGPT",
         "resolved_commit_sha": "deadbeef00000000000000000000000000000000",
@@ -32,38 +34,89 @@ def test_acceptance_1_invalid_supplied_sha_rejected(client: TestClient):
     assert resp.status_code == 400
     assert "could not be verified" in resp.json()["detail"].lower()
 
+    # Case B: File manifest supplied WITHOUT explicit allow_unverified_commit=True -> MUST FAIL CLOSED
+    resp_manifest = client.post("/api/v1/repositories/submit", json={
+        "repository_url": "https://github.com/karpathy/nanoGPT",
+        "resolved_commit_sha": "deadbeef00000000000000000000000000000000",
+        "file_manifest": [{"path": "model.py", "content": "import torch\n"}],
+        "allow_unverified_commit": False
+    })
+    assert resp_manifest.status_code == 400
+    assert "could not be verified" in resp_manifest.json()["detail"].lower()
+
+    # Case C: Malformed commit SHA (non-hex or invalid length)
+    resp_malformed = client.post("/api/v1/repositories/submit", json={
+        "repository_url": "https://github.com/karpathy/nanoGPT",
+        "resolved_commit_sha": "not_a_hex_commit_sha_xyz",
+        "allow_unverified_commit": False
+    })
+    assert resp_malformed.status_code == 400
+    assert "malformed" in resp_malformed.json()["detail"].lower() or "could not be verified" in resp_malformed.json()["detail"].lower()
+
 
 def test_acceptance_2_full_40_char_sha_and_exact_commit_provenance(db: Session):
     """
-    Checklist Items 1 & 2 & Audit 4 High 2:
-    - Resolves 40-character commit SHA on local repository.
-    - Acquires files via production acquire_files_from_repository path.
-    - Proves acquired files belong to the recorded commit snapshot with cryptographic hashes.
+    Audit 5 High 2 & High 3:
+    - Tests temporary Git repository with TWO commits and an uncommitted file on disk.
+    - Supplies an abbreviated 8-character SHA for Commit 1.
+    - Proves acquire_repository() canonicalizes to the exact full 40-character SHA.
+    - Proves acquire_files_from_repository() extracts ONLY Commit 1 files, excluding Commit 2 and dirty files.
     """
-    current_repo_path = Path(__file__).resolve().parent.parent.parent
-    sha = repository_analyzer.resolve_remote_commit_sha(str(current_repo_path), "kkathambari", "Research_Scribe", "main")
-    assert sha is not None
-    assert len(sha) == 40, f"Expected 40-character hex commit SHA, got {len(sha)}: {sha}"
-    assert re.match(r"^[0-9a-f]{40}$", sha)
+    import subprocess
+    with tempfile.TemporaryDirectory() as temp_repo:
+        repo_dir = Path(temp_repo)
+        subprocess.run(["git", "init"], cwd=str(repo_dir), check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.name", "Tester"], cwd=str(repo_dir), check=True)
+        subprocess.run(["git", "config", "user.email", "tester@example.com"], cwd=str(repo_dir), check=True)
 
-    # Acquire repository model
-    repo = repository_analyzer.acquire_repository(
-        db=db,
-        project_id="proj_acceptance_provenance",
-        repository_url=str(current_repo_path),
-        resolved_commit_sha=sha
-    )
-    assert repo.resolved_commit_sha == sha
-    assert repo.acquisition_status == "acquired"
+        # Commit 1
+        (repo_dir / "file1.py").write_text("def v1(): return 1\n", encoding="utf-8")
+        subprocess.run(["git", "add", "file1.py"], cwd=str(repo_dir), check=True)
+        subprocess.run(["git", "commit", "-m", "commit 1"], cwd=str(repo_dir), check=True)
+        sha1_full = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=str(repo_dir), text=True).strip()
+        sha1_abbrev = sha1_full[:8]
+        assert len(sha1_full) == 40
 
-    # Create production snapshot from acquired files
-    snapshot = repository_analyzer.create_snapshot_from_manifest(db, repo)
-    assert snapshot.commit_sha == sha
-    assert len(snapshot.files) > 0
-    for f in snapshot.files:
-        assert f.content_hash is not None
-        assert len(f.content_hash) == 40  # SHA-1 content hash
-        assert f.size_bytes > 0
+        # Commit 2
+        (repo_dir / "file2.py").write_text("def v2(): return 2\n", encoding="utf-8")
+        (repo_dir / "file1.py").write_text("def v1(): return 999\n", encoding="utf-8")
+        subprocess.run(["git", "add", "."], cwd=str(repo_dir), check=True)
+        subprocess.run(["git", "commit", "-m", "commit 2"], cwd=str(repo_dir), check=True)
+        sha2_full = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=str(repo_dir), text=True).strip()
+        assert sha1_full != sha2_full
+
+        # Add uncommitted dirty file and dirty working tree change
+        (repo_dir / "uncommitted_dirty.py").write_text("dirty_data = True\n", encoding="utf-8")
+        (repo_dir / "file1.py").write_text("def v1(): return 'dirty_uncommitted'\n", encoding="utf-8")
+
+        # Acquire repository using abbreviated SHA of Commit 1
+        repo = repository_analyzer.acquire_repository(
+            db=db,
+            project_id="proj_acceptance_two_commit_provenance",
+            repository_url=str(repo_dir),
+            resolved_commit_sha=sha1_abbrev
+        )
+
+        # 1. Verify canonicalization to full 40-character SHA
+        assert repo.resolved_commit_sha == sha1_full
+        assert len(repo.resolved_commit_sha) == 40
+        assert repo.acquisition_status == "acquired"
+
+        # 2. Acquire files and verify exact Commit 1 tree isolation
+        acquired_files = repository_analyzer.acquire_files_from_repository(repo)
+        file_map = {f["path"]: f["content"] for f in acquired_files}
+
+        # Must include file1.py with commit 1 content
+        assert "file1.py" in file_map
+        assert "def v1(): return 1" in file_map["file1.py"]
+        assert "dirty_uncommitted" not in file_map["file1.py"]
+        assert "return 999" not in file_map["file1.py"]
+
+        # Must NOT include file2.py (belongs to commit 2)
+        assert "file2.py" not in file_map
+
+        # Must NOT include uncommitted_dirty.py
+        assert "uncommitted_dirty.py" not in file_map
 
 
 def test_acceptance_3_automatic_mode_requires_explicit_repo_and_venue(db: Session, client: TestClient):
@@ -125,7 +178,7 @@ def test_acceptance_5_novelty_analysis_evidence_driven_and_insufficient_evidence
         assert len(g.source_ids) == 0
         assert len(g.supporting_passages) == 0
 
-    # Case B: Project with authentic literature sources -> returns traceable hypothesis
+    # Case B: Project with authentic literature sources -> targeted topic evidence
     proj_with_lit = Project(
         id="proj_with_lit",
         title="Valid Literature Project",
@@ -134,25 +187,46 @@ def test_acceptance_5_novelty_analysis_evidence_driven_and_insufficient_evidence
     )
     db.add(proj_with_lit)
 
-    src = Source(
-        id="src_valid_1",
+    src1 = Source(
+        id="src_arch_1",
         project_id=proj_with_lit.id,
         title="Attention Is All You Need",
         authors="Vaswani et al.",
         year=2017,
         abstract="We introduce the Transformer, a novel architecture based entirely on self-attention."
     )
-    db.add(src)
+    src2 = Source(
+        id="src_eval_2",
+        project_id=proj_with_lit.id,
+        title="BERT Pre-training Evaluation",
+        authors="Devlin et al.",
+        year=2019,
+        abstract="The model demonstrates superior evaluation performance achieving a 94.2 F1 accuracy metric score on SQuAD benchmark."
+    )
+    db.add(src1)
+    db.add(src2)
     db.commit()
 
     gaps = novelty_analyzer.analyze_research_gaps_and_contributions(db, proj_with_lit.id)
     assert len(gaps) == 7
-    for g in gaps:
-        assert g.status == "hypothesis_requiring_review"
-        assert len(g.supporting_passages) > 0
-        assert g.direct_support is not None
-        assert g.inferred_extrapolation is not None
-        assert len(g.source_ids) > 0
+
+    # 1. Architecture gap must specifically cite src1 and quote the Transformer passage
+    gap_arch = next(g for g in gaps if "Architecture" in g.dimension)
+    assert gap_arch.status == "hypothesis_requiring_review"
+    assert src1.id in gap_arch.source_ids
+    assert "Transformer, a novel architecture" in gap_arch.direct_support
+
+    # 2. Evaluation metrics gap must specifically cite src2 and quote F1 metric
+    gap_metric = next(g for g in gaps if "Metrics" in g.dimension)
+    assert gap_metric.status == "hypothesis_requiring_review"
+    assert src2.id in gap_metric.source_ids
+    assert "94.2 F1" in gap_metric.direct_support
+
+    # 3. Limitations gap was not discussed in either abstract -> MUST return insufficient_evidence with None direct_support
+    gap_limit = next(g for g in gaps if "Limitations" in g.dimension)
+    assert gap_limit.status == "insufficient_evidence"
+    assert gap_limit.direct_support is None
+    assert len(gap_limit.source_ids) == 0
 
 
 def test_acceptance_6_guided_mode_checkpoint_invalidation_lifecycle(client: TestClient):
@@ -243,8 +317,9 @@ def test_acceptance_7_journal_intelligence_unverified_profile_provisional(client
 
 def test_acceptance_8_docx_template_fidelity_tables_headers_and_abstract(client: TestClient):
     """
-    Audit 4 Medium-High 5:
+    Audit 5 Medium 5:
     Tests DOCX template fidelity:
+    - Run-level formatting preservation (bold/italic runs retained during placeholder replacement)
     - Placeholders in headers and footers
     - Placeholders inside table cells (metadata header table)
     - Verifies export endpoint passes manuscript.abstract into exporter
@@ -254,19 +329,27 @@ def test_acceptance_8_docx_template_fidelity_tables_headers_and_abstract(client:
         tmp_path = Path(tmp_dir)
         template_file = tmp_path / "journal_template.docx"
 
-        # Construct realistic journal template with header, metadata table, and body
+        # Construct realistic journal template with header, metadata table, and stylized runs
         doc = Document()
         # 1. Section header
         header = doc.sections[0].header
         hp = header.paragraphs[0]
         hp.text = "Running Header: {{TITLE}}"
 
-        # 2. Document Title
-        doc.add_heading("{{TITLE}}", level=0)
+        # 2. Document Title with distinct styled runs
+        title_p = doc.add_paragraph()
+        run_lead = title_p.add_run("Paper Title: ")
+        run_lead.bold = True
+        run_placeholder = title_p.add_run("{{TITLE}}")
+        run_placeholder.italic = True
 
         # 3. Metadata Table (common in IEEE and ACM templates)
         meta_table = doc.add_table(rows=2, cols=2)
-        meta_table.rows[0].cells[0].paragraphs[0].text = "Authors: {{AUTHORS}}"
+        cell_auth = meta_table.rows[0].cells[0].paragraphs[0]
+        r_auth_label = cell_auth.add_run("Authors: ")
+        r_auth_label.bold = True
+        cell_auth.add_run("{{AUTHORS}}")
+
         meta_table.rows[0].cells[1].paragraphs[0].text = "Venue: IEEE Transactions"
         meta_table.rows[1].cells[0].paragraphs[0].text = "Abstract: {{ABSTRACT}}"
         meta_table.rows[1].cells[1].paragraphs[0].text = "Keywords: {{KEYWORDS}}"
@@ -322,12 +405,22 @@ def test_acceptance_8_docx_template_fidelity_tables_headers_and_abstract(client:
         assert "{{TITLE}}" not in header_text
         assert "Grounded Software Engineering Synthesis" in header_text
 
-        # Verify Table cell placeholders replaced
+        # Verify Title runs preserved formatting
+        p_title_out = out_doc.paragraphs[0]
+        assert "Paper Title: Grounded Software Engineering Synthesis" in p_title_out.text
+        # The lead run must still be bold
+        assert any(r.bold is True for r in p_title_out.runs if "Paper Title" in r.text)
+
+        # Verify Table cell placeholders replaced and styles preserved
         table_0 = out_doc.tables[0]
         meta_cell_authors = table_0.rows[0].cells[0].text
         meta_cell_abstract = table_0.rows[1].cells[0].text
         assert "{{AUTHORS}}" not in meta_cell_authors
         assert "Research Author(s)" in meta_cell_authors
+        # The author label must still be bold
+        cell_runs = table_0.rows[0].cells[0].paragraphs[0].runs
+        assert any(r.bold is True for r in cell_runs if "Authors" in r.text)
+
         assert "{{ABSTRACT}}" not in meta_cell_abstract
         assert "We evaluate repository provenance" in meta_cell_abstract
 

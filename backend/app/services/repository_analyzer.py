@@ -118,30 +118,41 @@ class RepositoryAnalyzer:
 
         return None
 
-    def verify_commit_sha_exists(
+    def canonicalize_and_verify_commit_sha(
         self,
         repository_url: str,
         owner: str,
         repo_name: str,
         commit_sha: str
-    ) -> bool:
-        """Verifies that a specified commit SHA actually exists in the local or remote Git repository."""
-        if not commit_sha or len(commit_sha) < 7:
-            return False
+    ) -> Optional[str]:
+        """
+        Validates hex format (7 to 40 chars), verifies commit existence in the designated
+        repository, and canonicalizes to the official full 40-character commit SHA.
+        Returns None if malformed, invalid, or non-existent.
+        """
+        if not commit_sha:
+            return None
+        clean_sha = commit_sha.strip().lower()
+        if not re.match(r"^[0-9a-f]{7,40}$", clean_sha):
+            return None
 
         # 1. Local disk path
-        if Path(repository_url).exists():
+        repo_path = Path(repository_url)
+        if repo_path.exists():
             try:
                 proc = subprocess.run(
-                    ["git", "cat-file", "-e", f"{commit_sha}^{{commit}}"],
-                    cwd=str(Path(repository_url).resolve()),
+                    ["git", "rev-parse", "--verify", f"{clean_sha}^{{commit}}"],
+                    cwd=str(repo_path.resolve()),
                     capture_output=True,
+                    text=True,
                     timeout=5
                 )
                 if proc.returncode == 0:
-                    return True
-            except Exception:
-                pass
+                    canonical = proc.stdout.strip().lower()
+                    if len(canonical) == 40 and re.match(r"^[0-9a-f]{40}$", canonical):
+                        return canonical
+            except Exception as e:
+                logger.debug(f"Local git rev-parse failed for {repository_url}@{clean_sha}: {e}")
 
         # 2. Remote GitHub repository
         try:
@@ -151,17 +162,49 @@ class RepositoryAnalyzer:
                 headers["Authorization"] = f"Bearer {github_token}"
             with httpx.Client(timeout=8.0) as client:
                 resp = client.get(
-                    f"https://api.github.com/repos/{owner}/{repo_name}/commits/{commit_sha}",
+                    f"https://api.github.com/repos/{owner}/{repo_name}/commits/{clean_sha}",
                     headers=headers
                 )
                 if resp.status_code == 200:
-                    return True
+                    data = resp.json()
+                    full_sha = data.get("sha", "").lower()
+                    if len(full_sha) == 40 and re.match(r"^[0-9a-f]{40}$", full_sha):
+                        return full_sha
                 elif resp.status_code == 404:
-                    return False
+                    return None
         except Exception as e:
-            logger.debug(f"GitHub commits SHA verification failed for {owner}/{repo_name}@{commit_sha}: {e}")
+            logger.debug(f"GitHub commits SHA verification failed for {owner}/{repo_name}@{clean_sha}: {e}")
 
-        return False
+        # 3. Remote git ls-remote check if URL is git cloneable
+        if repository_url.startswith(("http://", "https://", "git://", "git@")):
+            try:
+                proc = subprocess.run(
+                    ["git", "ls-remote", repository_url],
+                    capture_output=True,
+                    text=True,
+                    timeout=8
+                )
+                if proc.returncode == 0:
+                    for line in proc.stdout.splitlines():
+                        parts = line.split()
+                        if parts:
+                            remote_sha = parts[0].lower()
+                            if remote_sha.startswith(clean_sha) and len(remote_sha) == 40:
+                                return remote_sha
+            except Exception as e:
+                logger.debug(f"git ls-remote lookup failed for {repository_url}: {e}")
+
+        return None
+
+    def verify_commit_sha_exists(
+        self,
+        repository_url: str,
+        owner: str,
+        repo_name: str,
+        commit_sha: str
+    ) -> bool:
+        """Verifies that a specified commit SHA actually exists in the local or remote Git repository."""
+        return self.canonicalize_and_verify_commit_sha(repository_url, owner, repo_name, commit_sha) is not None
 
     def acquire_repository(
         self,
@@ -176,22 +219,35 @@ class RepositoryAnalyzer:
         owner, repo_name = self.parse_github_url(repository_url)
 
         # Resolve or independently verify real commit SHA
-        commit_sha = resolved_commit_sha
-        if commit_sha:
-            # Caller supplied a commit SHA: independently verify it exists in the designated repository
-            is_valid = self.verify_commit_sha_exists(repository_url, owner, repo_name, commit_sha)
-            if not is_valid:
+        commit_sha = None
+        if resolved_commit_sha:
+            clean_sha = resolved_commit_sha.strip().lower()
+            # 1. Validate format strictly
+            if not re.match(r"^[0-9a-f]{7,40}$", clean_sha):
                 if not allow_unverified_commit:
                     raise ValueError(
-                        f"Repository file acquisition failed: Supplied commit SHA '{commit_sha}' could not be verified in repository '{repository_url}'. "
-                        f"Genuine Git commit SHA is required to guarantee research provenance."
+                        f"Repository file acquisition failed: Supplied commit SHA '{resolved_commit_sha}' is malformed. "
+                        f"Commit SHA must be a 7 to 40 character hexadecimal string."
                     )
+                commit_sha = f"UNVERIFIED_{clean_sha}"
                 acq_status = "acquired_unverified_commit"
             else:
-                acq_status = "acquired"
+                # 2. Canonicalize to full 40-character commit SHA
+                canonical = self.canonicalize_and_verify_commit_sha(repository_url, owner, repo_name, clean_sha)
+                if not canonical:
+                    if not allow_unverified_commit:
+                        raise ValueError(
+                            f"Repository file acquisition failed: Supplied commit SHA '{resolved_commit_sha}' could not be verified in repository '{repository_url}'. "
+                            f"Genuine Git commit SHA is required to guarantee research provenance."
+                        )
+                    commit_sha = clean_sha
+                    acq_status = "acquired_unverified_commit"
+                else:
+                    commit_sha = canonical  # Always canonical full 40-character SHA!
+                    acq_status = "acquired"
         else:
-            commit_sha = self.resolve_remote_commit_sha(repository_url, owner, repo_name, branch_or_tag)
-            if not commit_sha:
+            resolved_remote = self.resolve_remote_commit_sha(repository_url, owner, repo_name, branch_or_tag)
+            if not resolved_remote:
                 if not allow_unverified_commit:
                     raise ValueError(
                         f"Repository file acquisition failed: Commit SHA could not be verified for repository '{repository_url}' on revision '{branch_or_tag}'. "
@@ -200,6 +256,7 @@ class RepositoryAnalyzer:
                 commit_sha = f"UNVERIFIED_{hashlib.sha1(f'{owner}/{repo_name}@{branch_or_tag}'.encode()).hexdigest()}"
                 acq_status = "acquired_unverified_commit"
             else:
+                commit_sha = resolved_remote
                 acq_status = "acquired"
 
         repo = db.query(Repository).filter(
@@ -275,9 +332,25 @@ class RepositoryAnalyzer:
                             files = self._scan_directory_files(Path(clean_tmp), max_files, max_file_size)
                             if files:
                                 return files
+                        stderr_msg = archive_proc.stderr.read().decode('utf-8', errors='ignore') if archive_proc.stderr else ""
+                        raise RuntimeError(f"git archive exited with code {archive_proc.returncode}: {stderr_msg}")
                 except Exception as e:
-                    logger.debug(f"git archive extraction failed for {repo_path}: {e}")
-            return self._scan_directory_files(repo_path, max_files, max_file_size)
+                    logger.error(f"git archive extraction failed for {repo_path}: {e}")
+                    raise ValueError(
+                        f"Repository file acquisition failed: Exact commit '{local_sha}' could not be archived/extracted from '{repo_path}': {e}. "
+                        f"Scanning uncommitted local working tree is strictly prohibited under SRS v3.0 scientific provenance rules."
+                    )
+            elif not (repo_path / ".git").exists():
+                if not repository.acquisition_status.startswith("acquired_unverified"):
+                    raise ValueError(
+                        f"Repository path '{repo_path}' is not a valid Git repository. Genuine Git repository with commit provenance required."
+                    )
+                return self._scan_directory_files(repo_path, max_files, max_file_size)
+            else:
+                raise ValueError(
+                    f"Repository file acquisition failed: Cannot acquire files from '{repo_path}' without verified commit SHA. "
+                    f"Scanning uncommitted local working tree is strictly prohibited under SRS v3.0 scientific provenance rules."
+                )
 
         # B) Try git clone into temporary directory and checkout exact commit SHA
         try:

@@ -22,6 +22,7 @@ class ProjectBase(BaseModel):
 class ProjectCreate(ProjectBase):
     branch_or_tag: Optional[str] = Field("main", description="Branch, tag, or commit SHA")
     resolved_commit_sha: Optional[str] = Field(None, description="Explicit Git commit SHA")
+    allow_unverified_commit: bool = Field(False, description="Explicit opt-in override for unverified commit/manifest testing")
     file_manifest: Optional[List[dict]] = Field(None, description="Explicit repository file manifest")
 
 class ProjectUpdate(BaseModel):
