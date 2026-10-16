@@ -43,6 +43,12 @@
     </div>
 
     <div class="header-right">
+      <!-- LLM Provider Badge (FR-01, FR-08, FR-11) -->
+      <div class="llm-badge" id="llm-provider-badge" title="Active LLM Provider and Diagnostics" style="display: flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 9999px; font-size: 11px; font-weight: 600; background: rgba(14, 165, 233, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.3); cursor: pointer;">
+        <span id="llm-badge-dot" style="width: 7px; height: 7px; border-radius: 50%; background: #38bdf8;"></span>
+        <span id="llm-badge-text">LLM: loading...</span>
+      </div>
+
       <!-- Mode Badge -->
       <div class="mode-badge" id="mode-badge">
         <span class="mode-dot"></span>
@@ -720,6 +726,59 @@
         <button class="btn btn-secondary" id="btn-cancel-edit-source">Cancel</button>
         <button class="btn btn-secondary" id="btn-verify-source-online">Lookup Online (DOI/Title)</button>
         <button class="btn btn-accent" id="btn-save-edit-source">Save Metadata</button>
+      </div>
+    </div>
+  <!-- 6. LLM Provider Status & Diagnostics Modal (FR-01, FR-08, FR-11) -->
+  <div class="modal-backdrop" id="modal-llm-status" style="display: none;">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3 class="modal-title">LLM Provider Diagnostics & Resource Status</h3>
+        <button class="modal-close" id="btn-close-llm-modal">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div style="display: flex; flex-direction: column; gap: 12px;">
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+            <div style="padding: 10px; border-radius: 6px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08);">
+              <div style="font-size: 0.75rem; color: #94A3B8;">Active Provider</div>
+              <div style="font-size: 1rem; font-weight: 600; color: #38BDF8;" id="llm-modal-provider">ollama</div>
+            </div>
+            <div style="padding: 10px; border-radius: 6px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08);">
+              <div style="font-size: 0.75rem; color: #94A3B8;">Configured Model</div>
+              <div style="font-size: 0.95rem; font-weight: 600; color: #F1F5F9;" id="llm-modal-model">deepseek-coder:latest</div>
+            </div>
+          </div>
+
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+            <div style="padding: 10px; border-radius: 6px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08);">
+              <div style="font-size: 0.75rem; color: #94A3B8;">Service Reachability</div>
+              <div style="font-size: 0.95rem; font-weight: 600;" id="llm-modal-status">Checking...</div>
+            </div>
+            <div style="padding: 10px; border-radius: 6px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08);">
+              <div style="font-size: 0.75rem; color: #94A3B8;">Fallback Policy</div>
+              <div style="font-size: 0.95rem; font-weight: 600; color: #CBD5E1;" id="llm-modal-fallback">none (strict local)</div>
+            </div>
+          </div>
+
+          <div id="llm-modal-error-box" style="display: none; padding: 10px; border-radius: 6px; background: rgba(239, 68, 68, 0.15); border: 1px solid #EF4444; color: #FCA5A5; font-size: 0.85rem;"></div>
+
+          <div style="padding: 10px; border-radius: 6px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08);">
+            <div style="font-size: 0.75rem; color: #94A3B8; margin-bottom: 4px;">Installed Local Models:</div>
+            <div id="llm-modal-models-list" style="font-size: 0.85rem; color: #E2E8F0; font-family: monospace;">Loading...</div>
+          </div>
+
+          <!-- Quick Test Generation -->
+          <div style="padding: 10px; border-radius: 6px; background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.06);">
+            <div style="font-size: 0.75rem; color: #94A3B8; margin-bottom: 6px;">Test Generation (AC-02):</div>
+            <div style="display: flex; gap: 8px;">
+              <input type="text" id="llm-test-input" class="form-input" style="flex: 1;" placeholder="Prompt (e.g. Verify ResearchScribe in 5 words)" value="Verify ResearchScribe integration in 5 words.">
+              <button class="btn btn-secondary btn-sm" id="btn-run-llm-test">Run Test</button>
+            </div>
+            <div id="llm-test-result" style="margin-top: 8px; font-size: 0.82rem; color: #94A3B8; font-family: monospace; white-space: pre-wrap;"></div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="btn-close-llm-status">Close</button>
       </div>
     </div>
   </div>

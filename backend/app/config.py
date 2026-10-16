@@ -18,8 +18,18 @@ class Settings(BaseSettings):
     DATABASE_URL: str = f"sqlite:///{BASE_DIR / 'researchscribe.db'}"
     
     # LLM Settings
-    LLM_PROVIDER: str = "heuristic_and_gemini" # mock, gemini, openai
+    LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "ollama") # ollama, gemini, heuristic
+    OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+    OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "deepseek-coder:latest")
+    OLLAMA_TIMEOUT: float = float(os.getenv("OLLAMA_TIMEOUT", "60.0"))
+    OLLAMA_KEEP_ALIVE: str = os.getenv("OLLAMA_KEEP_ALIVE", "5m")
+    
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
+    GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+    GEMINI_TIMEOUT: float = float(os.getenv("GEMINI_TIMEOUT", "45.0"))
+    
+    LLM_FALLBACK_PROVIDER: str = os.getenv("LLM_FALLBACK_PROVIDER", "none") # none, gemini, heuristic
+    LLM_MAX_RETRIES: int = int(os.getenv("LLM_MAX_RETRIES", "2"))
     
     # CORS
     CORS_ORIGINS: list[str] = [

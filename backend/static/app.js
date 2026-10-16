@@ -43,6 +43,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   setupNavigationTabs();
   setupEventHandlers();
   await loadProjects();
+  await loadLLMStatus();
 });
 
 // Navigation Tabs
@@ -1476,4 +1477,121 @@ async function triggerAutomaticRun() {
     if (btn) btn.disabled = false;
   }
 }
+
+// -------------------------------------------------------------
+// LLM Provider Status & Diagnostics (FR-01, FR-08, FR-11)
+// -------------------------------------------------------------
+async function loadLLMStatus() {
+  try {
+    const res = await fetch(`${API_BASE}/llm/status`);
+    if (!res.ok) return;
+    const data = await res.json();
+
+    const badgeText = document.getElementById("llm-badge-text");
+    const badgeDot = document.getElementById("llm-badge-dot");
+    const badgeWrapper = document.getElementById("llm-provider-badge");
+
+    if (badgeText && badgeDot) {
+      if (data.available && data.model_installed) {
+        badgeText.textContent = `${data.active_provider}: ${data.configured_model}`;
+        badgeDot.style.background = "#10B981";
+        if (badgeWrapper) {
+          badgeWrapper.style.color = "#38BDF8";
+          badgeWrapper.style.borderColor = "rgba(56, 189, 248, 0.4)";
+        }
+      } else if (data.available && !data.model_installed) {
+        badgeText.textContent = `${data.active_provider}: model missing`;
+        badgeDot.style.background = "#F59E0B";
+        if (badgeWrapper) {
+          badgeWrapper.style.color = "#FBBF24";
+          badgeWrapper.style.borderColor = "rgba(245, 158, 11, 0.4)";
+        }
+      } else {
+        badgeText.textContent = `${data.active_provider}: offline`;
+        badgeDot.style.background = "#EF4444";
+        if (badgeWrapper) {
+          badgeWrapper.style.color = "#F87171";
+          badgeWrapper.style.borderColor = "rgba(239, 68, 68, 0.4)";
+        }
+      }
+    }
+
+    const modalProv = document.getElementById("llm-modal-provider");
+    const modalMod = document.getElementById("llm-modal-model");
+    const modalStatus = document.getElementById("llm-modal-status");
+    const modalFallback = document.getElementById("llm-modal-fallback");
+    const modalError = document.getElementById("llm-modal-error-box");
+    const modalModels = document.getElementById("llm-modal-models-list");
+
+    if (modalProv) modalProv.textContent = data.active_provider;
+    if (modalMod) modalMod.textContent = data.configured_model;
+    if (modalFallback) modalFallback.textContent = data.fallback_provider || "none (strict local)";
+    if (modalStatus) {
+      if (data.available && data.model_installed) {
+        modalStatus.innerHTML = `<span style="color: #10B981;">Online & Ready</span> (${data.latency_ms || 0}ms)`;
+      } else if (data.available && !data.model_installed) {
+        modalStatus.innerHTML = `<span style="color: #F59E0B;">Connected, Model Missing</span>`;
+      } else {
+        modalStatus.innerHTML = `<span style="color: #EF4444;">Service Unreachable</span>`;
+      }
+    }
+    if (modalError) {
+      if (data.error_message || data.instructions) {
+        modalError.style.display = "block";
+        modalError.innerHTML = `<strong>${escapeHtml(data.error_message || "")}</strong><br><span style="font-size:0.8rem; color:#CBD5E1;">${escapeHtml(data.instructions || "")}</span>`;
+      } else {
+        modalError.style.display = "none";
+      }
+    }
+    if (modalModels) {
+      modalModels.textContent = (data.available_models && data.available_models.length > 0)
+        ? data.available_models.join(", ")
+        : "No models listed or service offline.";
+    }
+  } catch (err) {
+    console.warn("LLM status check error:", err);
+  }
+}
+
+// Bind LLM Modal handlers
+const llmBadge = document.getElementById("llm-provider-badge");
+if (llmBadge) {
+  llmBadge.addEventListener("click", () => {
+    loadLLMStatus();
+    openModal("modal-llm-status");
+  });
+}
+const btnCloseLlm = document.getElementById("btn-close-llm-status");
+if (btnCloseLlm) btnCloseLlm.addEventListener("click", () => closeModal("modal-llm-status"));
+const btnCloseLlmX = document.getElementById("btn-close-llm-modal");
+if (btnCloseLlmX) btnCloseLlmX.addEventListener("click", () => closeModal("modal-llm-status"));
+
+const btnRunTest = document.getElementById("btn-run-llm-test");
+if (btnRunTest) {
+  btnRunTest.addEventListener("click", async () => {
+    const input = document.getElementById("llm-test-input");
+    const resultDiv = document.getElementById("llm-test-result");
+    if (!input || !resultDiv) return;
+    btnRunTest.disabled = true;
+    resultDiv.textContent = "Generating test response via active provider...";
+    try {
+      const resp = await fetch(`${API_BASE}/llm/test`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: input.value || "Confirm ResearchScribe integration in 5 words." })
+      });
+      const data = await resp.json();
+      if (resp.ok) {
+        resultDiv.innerHTML = `<span style="color: #34D399;">Success (${data.latency_ms}ms) [${data.provider}/${data.model}]:</span>\n${escapeHtml(data.response)}`;
+      } else {
+        resultDiv.innerHTML = `<span style="color: #F87171;">Error (${resp.status}):</span>\n${escapeHtml(data.detail || JSON.stringify(data))}`;
+      }
+    } catch (err) {
+      resultDiv.innerHTML = `<span style="color: #F87171;">Network Error:</span> ${escapeHtml(err.message)}`;
+    } finally {
+      btnRunTest.disabled = false;
+    }
+  });
+}
+
 

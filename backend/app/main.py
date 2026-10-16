@@ -20,6 +20,7 @@ from app.api.v1 import (
     verification,
     writing,
     export,
+    llm,
 )
 
 # Initialize database schema
@@ -51,15 +52,19 @@ app.include_router(manuscripts.router, prefix=settings.API_V1_STR)
 app.include_router(verification.router, prefix=settings.API_V1_STR)
 app.include_router(writing.router, prefix=settings.API_V1_STR)
 app.include_router(export.router, prefix=settings.API_V1_STR)
+app.include_router(llm.router, prefix=settings.API_V1_STR)
 
 @app.get("/health")
 def health_check():
+    active_model = settings.OLLAMA_MODEL if settings.LLM_PROVIDER == "ollama" else settings.GEMINI_MODEL
     return {
         "status": "healthy",
         "service": "ResearchScribe API",
         "version": settings.VERSION,
         "database": "sqlite",
-        "llm_provider": settings.LLM_PROVIDER
+        "llm_provider": settings.LLM_PROVIDER,
+        "llm_model": active_model,
+        "llm_fallback": getattr(settings, "LLM_FALLBACK_PROVIDER", "none")
     }
 
 # Mount static frontend directory if available

@@ -1,0 +1,56 @@
+version: "3.8"
+
+services:
+  # ResearchScribe Core Application Service
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: researchscribe-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - LLM_PROVIDER=${LLM_PROVIDER:-ollama}
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://ollama:11434}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-deepseek-coder:latest}
+      - OLLAMA_TIMEOUT=${OLLAMA_TIMEOUT:-60.0}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-1.5-flash}
+      - LLM_FALLBACK_PROVIDER=${LLM_FALLBACK_PROVIDER:-none}
+      - LLM_MAX_RETRIES=${LLM_MAX_RETRIES:-2}
+    volumes:
+      - ./backend/storage:/app/storage
+      - ./backend/researchscribe.db:/app/researchscribe.db
+    depends_on:
+      ollama:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Local LLM Service (Ollama Container)
+  ollama:
+    image: ollama/ollama:latest
+    container_name: researchscribe-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      # Persistent volume ensures downloaded models survive container restarts (FR-10.4, AC-13)
+      - ollama_models:/root/.ollama
+    # GPU Acceleration (optional - uncomment if NVIDIA Container Toolkit is installed)
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:11434/api/tags || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+volumes:
+  ollama_models:
+    name: researchscribe_ollama_models

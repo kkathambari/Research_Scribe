@@ -101,7 +101,8 @@ class CitationFormatterService:
         
         if manuscript_text and not cited_identifiers:
             cited_identifiers = set(re.findall(r'\[([a-zA-Z0-9_\-]+)\]', manuscript_text))
-            cited_identifiers.update(re.findall(r'\(([a-zA-Z0-9_\-]+)(?:,?\s*\d{4})?\)', manuscript_text))
+            author_date_matches = re.findall(r'\(([A-Za-z0-9_\-]+)(?:\s+et\s+al\.?)?(?:,?\s*\d{4}[a-z]?)?\)', manuscript_text)
+            cited_identifiers.update(author_date_matches)
 
         if include_all or not cited_identifiers:
             target_sources = norm_sources

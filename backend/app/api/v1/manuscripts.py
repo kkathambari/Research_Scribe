@@ -16,6 +16,7 @@ from app.schemas.manuscript import (
 from app.services.synthesis_engine import synthesis_engine
 from app.services.verification_engine import citation_verifier
 from app.services.citation_formatter import citation_formatter
+from app.services.llm import LLMError
 
 router = APIRouter(prefix="/manuscripts", tags=["Manuscripts"])
 
@@ -246,25 +247,29 @@ async def generate_section(
     ]
 
     # Generate section content
-    generated_text = await synthesis_engine.generate_section(
-        project={
-            "title": project.title,
-            "topic": project.topic,
-            "research_problem": project.research_problem,
-            "research_questions": project.research_questions,
-            "objectives": project.objectives,
-            "academic_discipline": project.academic_discipline,
-            "publication_type": project.publication_type,
-            "citation_style": manuscript.citation_style
-        },
-        section_type=payload.section_type or sec.section_type,
-        section_title=payload.title or sec.title,
-        sources=sources_list,
-        evidences=evidences_list,
-        instructions=payload.instructions or sec.instructions,
-        word_limit=payload.word_limit or sec.word_limit,
-        experimental_data=payload.experimental_data
-    )
+    try:
+        generated_text = await synthesis_engine.generate_section(
+            project={
+                "title": project.title,
+                "topic": project.topic,
+                "research_problem": project.research_problem,
+                "research_questions": project.research_questions,
+                "objectives": project.objectives,
+                "academic_discipline": project.academic_discipline,
+                "publication_type": project.publication_type,
+                "citation_style": manuscript.citation_style
+            },
+            section_type=payload.section_type or sec.section_type,
+            section_title=payload.title or sec.title,
+            sources=sources_list,
+            evidences=evidences_list,
+            instructions=payload.instructions or sec.instructions,
+            word_limit=payload.word_limit or sec.word_limit,
+            experimental_data=payload.experimental_data
+        )
+    except LLMError as err:
+        # Preserve existing manuscript section content and provide actionable error
+        raise HTTPException(status_code=503, detail=str(err))
 
     sec.content = generated_text
     sec.status = "generated"

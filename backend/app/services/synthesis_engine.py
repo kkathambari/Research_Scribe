@@ -1,9 +1,13 @@
 import os
 import re
 from typing import List, Dict, Any, Optional
+import logging
 import httpx
 from app.config import settings
 from app.services.citation_formatter import citation_formatter
+from app.services.llm import llm_manager, LLMError, InvalidStructuredOutputError
+
+logger = logging.getLogger(__name__)
 
 class SynthesisEngineService:
     """Grounded RAG synthesis engine for literature reviews and manuscript sections."""
@@ -87,23 +91,38 @@ class SynthesisEngineService:
         """
         Generates section text grounded in available sources and extracted evidence.
         """
-        # If Gemini API Key is configured and provider enabled, try LLM API
-        if settings.GEMINI_API_KEY and len(settings.GEMINI_API_KEY.strip()) > 10:
-            try:
-                llm_result = await self._generate_with_gemini(
+        provider_name = (settings.LLM_PROVIDER or "ollama").strip().lower()
+
+        # If LLM provider is explicitly heuristic or mock, use deterministic heuristic draft
+        if provider_name in ["heuristic", "mock"]:
+            return self._generate_heuristic_grounded_draft(
+                project, section_type, section_title, sources, evidences, instructions, word_limit, experimental_data
+            )
+
+        # Attempt generation via active LLM provider (Ollama, Gemini, etc.)
+        try:
+            llm_result = await self._generate_with_llm(
+                project, section_type, section_title, sources, evidences, instructions, word_limit, experimental_data
+            )
+            if llm_result:
+                return llm_result
+        except Exception as e:
+            # Check if explicit fallback is configured
+            fallback_name = getattr(settings, "LLM_FALLBACK_PROVIDER", "none").strip().lower()
+            if fallback_name == "heuristic" or provider_name == "heuristic_and_gemini":
+                logger.warning(f"[SynthesisEngine] Primary LLM failed ({e}), falling back to grounded heuristic generator.")
+                return self._generate_heuristic_grounded_draft(
                     project, section_type, section_title, sources, evidences, instructions, word_limit, experimental_data
                 )
-                if llm_result:
-                    return llm_result
-            except Exception:
-                pass
+            # Re-raise so caller receives actionable error and preserves existing content
+            raise
 
-        # Robust grounded heuristic synthesis engine
+        # Robust grounded heuristic synthesis engine fallback
         return self._generate_heuristic_grounded_draft(
             project, section_type, section_title, sources, evidences, instructions, word_limit, experimental_data
         )
 
-    async def _generate_with_gemini(
+    async def _generate_with_llm(
         self,
         project: Dict[str, Any],
         section_type: str,
@@ -115,26 +134,25 @@ class SynthesisEngineService:
         experimental_data: Optional[str]
     ) -> Optional[str]:
         prompt = self._build_prompt(project, section_type, section_title, sources, evidences, instructions, word_limit, experimental_data)
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={settings.GEMINI_API_KEY}"
-        
-        payload = {
-            "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {
-                "temperature": 0.2, # Low temperature for factual precision
-                "maxOutputTokens": 2048
-            }
-        }
+        system_prompt = (
+            "You are ResearchScribe, an academic writing assistant adhering to strict factual traceability.\n"
+            "Every research claim derived from literature MUST include an in-text citation pointing to one of the provided source keys.\n"
+            "Distinguish explicitly reported empirical findings from comparative syntheses or inferred research gaps.\n"
+            "Do NOT fabricate or invent citations, author names, publication years, or bibliographic metadata."
+        )
 
-        async with httpx.AsyncClient(timeout=45.0) as client:
-            resp = await client.post(url, json=payload)
-            if resp.status_code == 200:
-                data = resp.json()
-                candidates = data.get("candidates", [])
-                if candidates:
-                    parts = candidates[0].get("content", {}).get("parts", [])
-                    if parts:
-                        return parts[0].get("text", "").strip()
-        return None
+        resp = await llm_manager.generate(
+            prompt=prompt,
+            system_prompt=system_prompt,
+            temperature=0.2,
+            max_tokens=2048
+        )
+        text = resp.text.strip()
+        # AC-05: detect invalid or empty model output
+        if len(text) < 30:
+            raise InvalidStructuredOutputError(f"Model generation produced insufficient or empty output ({len(text)} characters).")
+
+        return text
 
     def _build_prompt(
         self,
@@ -148,11 +166,32 @@ class SynthesisEngineService:
         experimental_data: Optional[str]
     ) -> str:
         citation_style = project.get("citation_style", "APA")
+
+        # Format source metadata references
+        source_context = []
+        for i, s in enumerate(sources):
+            key = s.get("citation_key") or f"Src{i+1}"
+            auth = s.get("authors") or "Unknown"
+            yr = s.get("year") or "n.d."
+            source_context.append(f"- [{key}]: {auth} ({yr}) - \"{s.get('title')}\"")
+        sources_text = "\n".join(source_context) if source_context else "No sources available."
+
+        # Manage prompt length and output limits: budget top 20 evidence passages
         evidence_context = []
-        for i, ev in enumerate(evidences[:15]):
+        for i, ev in enumerate(evidences[:20]):
             src_key = ev.get("citation_key", f"Src{i+1}")
             page_info = f" (p. {ev.get('page_number')})" if ev.get("page_number") else ""
-            evidence_context.append(f"[{src_key}{page_info}] ({ev.get('category')}): \"{ev.get('passage_text')}\"")
+            cat = ev.get("category", "evidence")
+            evidence_context.append(f"[{src_key}{page_info}] ({cat}): \"{ev.get('passage_text')}\"")
+
+        # Summarize remaining evidence so none is silently discarded
+        if len(evidences) > 20:
+            remaining_by_cat: Dict[str, int] = {}
+            for ev in evidences[20:]:
+                cat = ev.get("category", "other")
+                remaining_by_cat[cat] = remaining_by_cat.get(cat, 0) + 1
+            cat_summary = ", ".join(f"{count} {cat}" for cat, count in remaining_by_cat.items())
+            evidence_context.append(f"[SUMMARY OF ADDITIONAL EXTRACTED EVIDENCE]: {len(evidences)-20} items ({cat_summary})")
 
         ev_text = "\n".join(evidence_context) if evidence_context else "No pre-extracted evidence passages provided."
 
@@ -168,6 +207,9 @@ RESEARCH METADATA:
 - Target Word Limit: ~{word_limit or 500} words
 - Citation Style: {citation_style}
 
+AVAILABLE SOURCE KEYS (Must only cite these):
+{sources_text}
+
 AVAILABLE EVIDENCE PASSAGES:
 {ev_text}
 
@@ -178,10 +220,11 @@ SUPPLIED EXPERIMENTAL DATA (if applicable):
 {experimental_data or 'None provided.'}
 
 STRICT ACADEMIC INTEGRITY REQUIREMENTS:
-1. Every claim derived from prior research MUST include an in-text citation using author-date or key style, e.g. (Author et al., Year).
-2. DO NOT hallucinate or fabricate citations. Only cite the sources provided in the evidence context.
-3. If an assertion is an interpretation or future hypothesis, state it clearly as such.
-4. Maintain formal scholarly prose, precise scientific terminology, and coherent logical transitions.
+1. Every claim derived from prior research MUST include an in-text citation pointing to one of the provided source keys.
+2. DO NOT hallucinate or fabricate citations. Only cite the sources provided in the context above.
+3. Distinguish directly reported findings from comparative syntheses and inferred research gaps.
+4. If an assertion is an interpretation or future hypothesis, state it clearly as such.
+5. Maintain formal scholarly prose, precise scientific terminology, and coherent logical transitions.
 """
 
     def _generate_heuristic_grounded_draft(

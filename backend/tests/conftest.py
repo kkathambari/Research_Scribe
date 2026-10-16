@@ -5,6 +5,10 @@ from sqlalchemy.orm import sessionmaker
 from app.main import app
 from app.db.base import Base
 from app.db.session import get_db
+from app.config import settings
+
+# Default test suite to fast deterministic heuristics unless explicitly patched
+settings.LLM_PROVIDER = "heuristic"
 
 TEST_DATABASE_URL = "sqlite:///:memory:"
 
