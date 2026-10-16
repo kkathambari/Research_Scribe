@@ -10,7 +10,8 @@ from app.models.evidence import Evidence
 from app.models.verification import Claim, Citation
 from app.schemas.manuscript import (
     ManuscriptResponse, ManuscriptSectionResponse,
-    ManuscriptSectionUpdate, SectionGenerateRequest
+    ManuscriptSectionUpdate, SectionGenerateRequest,
+    ManuscriptUpdate, LiteratureReviewGenerateRequest
 )
 from app.services.synthesis_engine import synthesis_engine
 from app.services.verification_engine import citation_verifier
@@ -35,6 +36,79 @@ def get_manuscript(manuscript_id: str, db: Session = Depends(get_db)):
     resp = ManuscriptResponse.from_orm(manuscript)
     resp.sections = sections_res
     return resp
+
+@router.get("/project/{project_id}", response_model=ManuscriptResponse)
+def get_manuscript_by_project(project_id: str, db: Session = Depends(get_db)):
+    manuscript = db.query(Manuscript).filter(Manuscript.project_id == project_id).first()
+    if not manuscript:
+        raise HTTPException(status_code=404, detail="Manuscript not found for project")
+    return get_manuscript(manuscript.id, db)
+
+@router.patch("/{manuscript_id}", response_model=ManuscriptResponse)
+def update_manuscript(
+    manuscript_id: str,
+    payload: ManuscriptUpdate,
+    db: Session = Depends(get_db)
+):
+    """
+    FR-07, FR-08 & Acceptance Criterion 10:
+    Style consistency: Switching between supported citation styles updates
+    both in-text citations and the bibliography consistently.
+    """
+    manuscript = db.query(Manuscript).filter(Manuscript.id == manuscript_id).first()
+    if not manuscript:
+        raise HTTPException(status_code=404, detail="Manuscript not found")
+
+    old_style = (manuscript.citation_style or "APA").upper()
+
+    if payload.title:
+        manuscript.title = payload.title
+
+    if payload.citation_style and payload.citation_style.upper() != old_style:
+        new_style = payload.citation_style.upper()
+        manuscript.citation_style = new_style
+
+        # Fetch project sources
+        sources_db = db.query(Source).filter(Source.project_id == manuscript.project_id).all()
+        sources_list = [
+            {
+                "id": s.id,
+                "title": s.title,
+                "authors": s.authors,
+                "year": s.year or s.publication_year,
+                "venue": s.venue,
+                "doi": s.doi,
+                "citation_key": s.citation_key
+            }
+            for s in sources_db
+        ]
+
+        if payload.reformat_citations:
+            # Reformat in-text citations across all narrative sections
+            all_cited_ids = set()
+            for sec in manuscript.sections:
+                if sec.section_type != "references" and sec.content:
+                    sec.content = citation_formatter.reformat_manuscript_citations(
+                        sec.content, old_style, new_style, sources_list
+                    )
+
+            # Re-format References section
+            ref_sec = next((s for s in manuscript.sections if s.section_type == "references"), None)
+            if ref_sec:
+                from app.services.exporter import exporter
+                cited_ids = exporter._extract_cited_identifiers(
+                    [{"content": s.content} for s in manuscript.sections if s.section_type != "references"],
+                    None
+                )
+                formatted_refs = citation_formatter.format_cited_bibliography(
+                    sources_list, cited_identifiers=cited_ids, style=new_style
+                )
+                ref_sec.content = "\n\n".join(formatted_refs) if formatted_refs else "No sources cited."
+
+    db.commit()
+    db.refresh(manuscript)
+
+    return get_manuscript(manuscript_id, db)
 
 @router.put("/{manuscript_id}/sections/{section_id}", response_model=ManuscriptSectionResponse)
 def update_section(
@@ -62,6 +136,53 @@ def update_section(
     resp.claims_count = len(claims)
     resp.verified_claims_count = len([c for c in claims if c.status in ["supported", "partially_supported"]])
     return resp
+
+@router.post("/{manuscript_id}/literature-review", response_model=ManuscriptSectionResponse)
+async def generate_literature_review(
+    manuscript_id: str,
+    payload: LiteratureReviewGenerateRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    FR-06: Generates or regenerates literature review grounded in selected reference papers.
+    Also synchronizes the References section to include cited papers.
+    """
+    manuscript = db.query(Manuscript).filter(Manuscript.id == manuscript_id).first()
+    if not manuscript:
+        raise HTTPException(status_code=404, detail="Manuscript not found")
+
+    # Find literature_review section
+    sec = next((s for s in manuscript.sections if s.section_type in ["literature_review", "related_work"]), None)
+    if not sec:
+        # Create literature review section if missing
+        sec = ManuscriptSection(
+            id=str(uuid.uuid4()),
+            manuscript_id=manuscript_id,
+            section_type="literature_review",
+            title="2. Related Work & Literature Review",
+            order=3
+        )
+        db.add(sec)
+        db.commit()
+        db.refresh(sec)
+
+    # Delegate to generate_section
+    resolved_sources = payload.source_ids or payload.selected_source_ids
+    resolved_instructions = payload.instructions or payload.focus_guidance
+    resolved_words = payload.word_limit or payload.word_target or 1200
+
+    return await generate_section(
+        manuscript_id=manuscript_id,
+        section_id=sec.id,
+        payload=SectionGenerateRequest(
+            section_type="literature_review",
+            title=sec.title,
+            instructions=resolved_instructions,
+            word_limit=resolved_words,
+            source_ids=resolved_sources
+        ),
+        db=db
+    )
 
 @router.post("/{manuscript_id}/sections/{section_id}/generate", response_model=ManuscriptSectionResponse)
 async def generate_section(
@@ -95,7 +216,7 @@ async def generate_section(
             "id": s.id,
             "title": s.title,
             "authors": s.authors,
-            "year": s.year,
+            "year": s.year or s.publication_year,
             "venue": s.venue,
             "doi": s.doi,
             "url": s.url,
@@ -188,6 +309,14 @@ async def generate_section(
                 match_score=cite_data.get("match_score", 1.0)
             )
             db.add(cite_obj)
+
+    # If this is literature review or main text, synchronize the References section (FR-08)
+    if (payload.section_type or sec.section_type) in ["literature_review", "related_work"]:
+        ref_sec = next((s for s in manuscript.sections if s.section_type == "references"), None)
+        if ref_sec:
+            # Update References section with cited bibliography entries
+            formatted_refs = citation_formatter.format_bibliography(sources_list, style=manuscript.citation_style)
+            ref_sec.content = "\n\n".join(formatted_refs) if formatted_refs else "No sources cited."
 
     db.commit()
     db.refresh(sec)

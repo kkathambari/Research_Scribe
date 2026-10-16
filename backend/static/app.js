@@ -139,24 +139,52 @@ function setupEventHandlers() {
     searchResultsSection.style.display = "none";
   });
 
-  // Manual Source Add
-  document.getElementById("btn-manual-source").addEventListener("click", promptAddManualSource);
+  // Batch PDF Upload & Manual Source Add (FR-02, FR-10)
+  const btnOpenBatch = document.getElementById("btn-open-batch-upload");
+  if (btnOpenBatch) btnOpenBatch.addEventListener("click", () => openModal("modal-batch-upload"));
+  const btnCloseBatch = document.getElementById("btn-close-batch-modal");
+  if (btnCloseBatch) btnCloseBatch.addEventListener("click", () => closeModal("modal-batch-upload"));
+  const btnCancelBatch = document.getElementById("btn-cancel-batch");
+  if (btnCancelBatch) btnCancelBatch.addEventListener("click", () => closeModal("modal-batch-upload"));
+  const btnStartBatch = document.getElementById("btn-start-batch-upload");
+  if (btnStartBatch) btnStartBatch.addEventListener("click", handleBatchPdfUpload);
 
-  // Upload PDF Modal
+  const btnManualAdd = document.getElementById("btn-add-manual-source") || document.getElementById("btn-manual-source");
+  if (btnManualAdd) btnManualAdd.addEventListener("click", openAddSourceModal);
+
+  // Edit Source Metadata Modal (FR-03.5)
+  const btnCloseEdit = document.getElementById("btn-close-edit-source-modal");
+  if (btnCloseEdit) btnCloseEdit.addEventListener("click", () => closeModal("modal-edit-source"));
+  const btnCancelEdit = document.getElementById("btn-cancel-edit-source");
+  if (btnCancelEdit) btnCancelEdit.addEventListener("click", () => closeModal("modal-edit-source"));
+  const btnSaveEdit = document.getElementById("btn-save-edit-source");
+  if (btnSaveEdit) btnSaveEdit.addEventListener("click", saveSourceMetadata);
+  const btnVerifyOnline = document.getElementById("btn-verify-source-online");
+  if (btnVerifyOnline) btnVerifyOnline.addEventListener("click", verifySourceMetadataOnline);
+
+  // 4-Level Verification Audit Button (FR-09)
+  const btnRunAudit = document.getElementById("btn-run-full-audit");
+  if (btnRunAudit) btnRunAudit.addEventListener("click", loadGlobalVerificationAudit);
+
+  // Upload PDF Modal (Single target)
   const dropZone = document.getElementById("pdf-drop-zone");
   const fileInput = document.getElementById("pdf-file-input");
-  dropZone.addEventListener("click", () => fileInput.click());
-  fileInput.addEventListener("change", (e) => {
-    if (e.target.files.length > 0) handleFileUpload(e.target.files[0]);
-  });
-  dropZone.addEventListener("dragover", (e) => { e.preventDefault(); dropZone.style.borderColor = "#3B82F6"; });
-  dropZone.addEventListener("dragleave", () => { dropZone.style.borderColor = "#334155"; });
-  dropZone.addEventListener("drop", (e) => {
-    e.preventDefault();
-    if (e.dataTransfer.files.length > 0) handleFileUpload(e.dataTransfer.files[0]);
-  });
-  document.getElementById("btn-close-upload-modal").addEventListener("click", () => closeModal("modal-upload-pdf"));
-  document.getElementById("btn-cancel-upload").addEventListener("click", () => closeModal("modal-upload-pdf"));
+  if (dropZone && fileInput) {
+    dropZone.addEventListener("click", () => fileInput.click());
+    fileInput.addEventListener("change", (e) => {
+      if (e.target.files.length > 0) handleFileUpload(e.target.files[0]);
+    });
+    dropZone.addEventListener("dragover", (e) => { e.preventDefault(); dropZone.style.borderColor = "#3B82F6"; });
+    dropZone.addEventListener("dragleave", () => { dropZone.style.borderColor = "#334155"; });
+    dropZone.addEventListener("drop", (e) => {
+      e.preventDefault();
+      if (e.dataTransfer.files.length > 0) handleFileUpload(e.dataTransfer.files[0]);
+    });
+  }
+  const btnCloseUpload = document.getElementById("btn-close-upload-modal");
+  if (btnCloseUpload) btnCloseUpload.addEventListener("click", () => closeModal("modal-upload-pdf"));
+  const btnCancelUpload = document.getElementById("btn-cancel-upload");
+  if (btnCancelUpload) btnCancelUpload.addEventListener("click", () => closeModal("modal-upload-pdf"));
 
   // Evidence Category Filter Pills
   document.querySelectorAll("#evidence-category-filters .pill").forEach(pill => {
@@ -168,7 +196,8 @@ function setupEventHandlers() {
   });
 
   // Save Project Settings (FR-02)
-  document.getElementById("btn-save-project-settings").addEventListener("click", saveProjectSettings);
+  const btnSaveProj = document.getElementById("btn-save-project-settings");
+  if (btnSaveProj) btnSaveProj.addEventListener("click", saveProjectSettings);
 }
 
 // Data Fetching: Projects
@@ -355,21 +384,28 @@ function openGenerateModal() {
   document.getElementById("gen-instructions").value = sec.instructions || "";
   document.getElementById("gen-word-limit").value = sec.word_limit || 500;
 
-  // Checkboxes for available sources
-  const container = document.getElementById("gen-source-checkboxes");
-  container.innerHTML = "";
-  if (state.sources.length === 0) {
-    container.innerHTML = `<span class="muted-note">No sources in library yet. Add sources to enable grounded in-text citations.</span>`;
-  } else {
-    state.sources.forEach(s => {
-      const label = document.createElement("label");
-      label.className = "checkbox-label";
-      label.innerHTML = `
-        <input type="checkbox" name="gen-sources" value="${s.id}" checked>
-        <span>[${s.citation_key || "Ref"}] ${s.title} (${s.year || "n.d."})</span>
-      `;
-      container.appendChild(label);
-    });
+  // Checkboxes for available sources (FR-06.8, FR-10.5)
+  const container = document.getElementById("gen-sources-checklist") || document.getElementById("gen-source-checkboxes");
+  if (container) {
+    container.innerHTML = "";
+    if (state.sources.length === 0) {
+      container.innerHTML = `<span class="muted-note" style="font-size:0.8rem; color:#94A3B8;">No sources in library yet. Add sources to enable grounded in-text citations.</span>`;
+    } else {
+      state.sources.forEach(s => {
+        const label = document.createElement("label");
+        label.className = "checkbox-label";
+        label.style.display = "flex";
+        label.style.alignItems = "center";
+        label.style.gap = "6px";
+        label.style.margin = "4px 0";
+        label.style.fontSize = "0.85rem";
+        label.innerHTML = `
+          <input type="checkbox" name="gen-sources" value="${s.id}" checked>
+          <span><strong>[${s.citation_key || "Ref"}]</strong> ${escapeHtml(s.title)} (${s.year || "n.d."})</span>
+        `;
+        container.appendChild(label);
+      });
+    }
   }
 
   openModal("modal-generate");
@@ -508,12 +544,55 @@ async function loadGlobalVerificationAudit() {
     countPartial.textContent = report.partially_supported_count;
     countUnverified.textContent = report.unverified_count;
     countMissing.textContent = report.citation_missing_count;
+
+    // FR-09: 4-Level Verification Audit Grid
+    if (report.four_level_audit) {
+      const el1 = document.getElementById("audit-level-1-count");
+      const el2 = document.getElementById("audit-level-2-count");
+      const el3 = document.getElementById("audit-level-3-count");
+      const el4 = document.getElementById("audit-level-4-count");
+      if (el1) el1.textContent = report.four_level_audit.level_1_citations_count;
+      if (el2) el2.textContent = report.four_level_audit.level_2_metadata_verified_count;
+      if (el3) el3.textContent = report.four_level_audit.level_3_evidence_identified_count;
+      if (el4) el4.textContent = report.four_level_audit.level_4_claims_verified_count;
+    }
+
+    const alertsEl = document.getElementById("audit-integrity-alerts");
+    if (alertsEl) {
+      alertsEl.innerHTML = "";
+      const integrity = report.integrity_audit || {};
+      const missingRefs = integrity.missing_references || [];
+      const uncitedBib = integrity.uncited_sources || [];
+      const unresolved = integrity.unresolved_placeholders || [];
+      const criticals = report.critical_errors || [];
+
+      if (criticals.length > 0) {
+        alertsEl.innerHTML += `
+          <div style="padding: 8px; background: rgba(239, 68, 68, 0.2); border: 1px solid #EF4444; border-radius: 4px; color: #FCA5A5; margin-top: 6px;">
+            <strong>Critical Citation Errors (${criticals.length}):</strong> ${criticals.map(e => escapeHtml(e)).join(" • ")}
+          </div>
+        `;
+      } else if (missingRefs.length === 0 && unresolved.length === 0) {
+        alertsEl.innerHTML = `
+          <div style="color: #10B981; font-weight: 500;">
+            ✓ All citations resolve to verified project records. Manuscript is export-ready.
+          </div>
+        `;
+      }
+      if (uncitedBib.length > 0) {
+        alertsEl.innerHTML += `
+          <div style="color: #94A3B8; font-size: 0.78rem; margin-top: 4px;">
+            Note: ${uncitedBib.length} library sources are currently uncited in manuscript text and will be omitted from the exported bibliography (FR-08.4).
+          </div>
+        `;
+      }
+    }
   } catch (err) {
     console.error("Global audit fetch failed:", err);
   }
 }
 
-// Sources & Literature Discovery
+// Sources & Literature Discovery (FR-01, FR-02, FR-03, FR-10)
 async function loadSources() {
   if (!state.currentProject) return;
   try {
@@ -523,24 +602,53 @@ async function loadSources() {
 
     sourcesTableBody.innerHTML = "";
     if (state.sources.length === 0) {
-      sourcesTableBody.innerHTML = `<tr><td colspan="6" style="text-align:center; color:#64748B;">No sources added. Use the search bar above to discover literature.</td></tr>`;
+      sourcesTableBody.innerHTML = `<tr><td colspan="7" style="text-align:center; color:#64748B;">No sources added. Use the search bar above to discover literature or click 'Upload Reference PDFs'.</td></tr>`;
       return;
     }
 
     state.sources.forEach(s => {
       const tr = document.createElement("tr");
-      const hasPdf = s.document ? `✅ ${s.document.page_count} pages` : `<button class="btn btn-secondary btn-sm" onclick="openPdfUploadModal('${s.id}', '${escapeAttr(s.title)}')">Upload PDF</button>`;
+
+      // FR-04: PDF & OCR status
+      let pdfStatusHtml = "";
+      if (s.document) {
+        const isOcrReq = s.document.text_content && s.document.text_content.includes("OCR processing required");
+        if (isOcrReq) {
+          pdfStatusHtml = `<span class="status-chip partially" title="${escapeAttr(s.document.text_content)}">⚠️ OCR Required</span>`;
+        } else {
+          pdfStatusHtml = `<span class="status-chip supported" title="${s.document.character_count} chars extracted">✅ ${s.document.page_count} p (${s.evidence_count || 0} ev)</span>`;
+        }
+      } else {
+        pdfStatusHtml = `<button class="btn btn-secondary btn-sm" onclick="openPdfUploadModal('${s.id}', '${escapeAttr(s.title)}')">Upload PDF</button>`;
+      }
+
+      // FR-03: Metadata verification chip
+      let metaChip = "";
+      const vStatus = s.metadata_verification_status || "unverified";
+      if (vStatus === "verified") {
+        metaChip = `<span class="status-chip supported">Verified</span>`;
+      } else if (vStatus === "flagged_mismatch") {
+        metaChip = `<span class="status-chip partially" title="${escapeAttr(s.mismatch_notes || 'Metadata mismatch detected')}">Flagged Mismatch</span>`;
+      } else {
+        metaChip = `<span class="status-chip unverified">Unverified</span>`;
+      }
+
+      // DOI link if available
+      const doiHtml = s.doi ? `<div style="font-size:0.75rem;"><a href="https://doi.org/${encodeURIComponent(s.doi)}" target="_blank" style="color:#60A5FA;">doi:${s.doi}</a></div>` : "";
 
       tr.innerHTML = `
-        <td><strong style="color:#60A5FA;">[${s.citation_key || "Ref"}]</strong></td>
+        <td><strong style="color:#60A5FA;">[${escapeHtml(s.citation_key || "Ref")}]</strong></td>
         <td>
-          <div style="font-weight:600;">${s.title}</div>
-          <div style="font-size:0.75rem; color:#64748B;">${s.venue || "Academic Publication"}</div>
+          <div style="font-weight:600;">${escapeHtml(s.title)}</div>
+          <div style="font-size:0.75rem; color:#64748B;">${escapeHtml(s.venue || "Academic Publication")}</div>
+          ${doiHtml}
         </td>
-        <td style="font-size:0.8rem; color:#94A3B8;">${s.authors || "Unknown"}</td>
+        <td style="font-size:0.8rem; color:#94A3B8;">${escapeHtml(s.authors || "Unknown")}</td>
         <td>${s.year || "n.d."}</td>
-        <td>${hasPdf}</td>
-        <td>
+        <td>${metaChip}</td>
+        <td>${pdfStatusHtml}</td>
+        <td style="white-space: nowrap;">
+          <button class="btn-link" style="color:#38BDF8; margin-right: 8px;" onclick="openEditSourceModal('${s.id}')">Edit</button>
           <button class="btn-link" style="color:#EF4444;" onclick="deleteSource('${s.id}')">Remove</button>
         </td>
       `;
@@ -778,14 +886,21 @@ function acceptPolishedText() {
   closeModal("modal-polish");
 }
 
-// Document Export (FR-15)
+// Document Export (FR-11, FR-26)
 async function runExport() {
-  const format = document.getElementById("export-format-select").value;
-  const style = document.getElementById("export-style-select").value;
-  const appendix = document.getElementById("export-verification-appendix").checked;
+  const formatEl = document.getElementById("export-format-select");
+  const format = formatEl ? formatEl.value : "docx";
+  const styleEl = document.getElementById("export-style-select") || document.getElementById("setting-citation-style");
+  const style = styleEl ? styleEl.value : (state.currentProject?.citation_style || "IEEE");
+  const appendixEl = document.getElementById("export-include-appendix") || document.getElementById("export-verification-appendix");
+  const appendix = appendixEl ? appendixEl.checked : true;
+  const blockEl = document.getElementById("export-block-critical");
+  const blockCritical = blockEl ? blockEl.checked : true;
 
-  closeModal("modal-export");
-  showToast(`Generating ${format.toUpperCase()} with ${style} citations...`, "info");
+  const warningBox = document.getElementById("export-integrity-warning");
+  if (warningBox) warningBox.style.display = "none";
+
+  showToast(`Validating integrity & generating ${format.toUpperCase()} (${style})...`, "info");
 
   try {
     const res = await fetch(`${API_BASE}/export`, {
@@ -795,10 +910,23 @@ async function runExport() {
         manuscript_id: state.currentManuscriptId,
         export_format: format,
         citation_style: style,
-        include_verification_appendix: appendix
+        include_verification_appendix: appendix,
+        block_on_critical_errors: blockCritical
       })
     });
+
     const data = await res.json();
+
+    if (!res.ok) {
+      if (warningBox) {
+        warningBox.style.display = "block";
+        warningBox.innerHTML = `<strong>Export Blocked (FR-11.6):</strong> ${escapeHtml(data.detail || "Critical citation integrity errors remain unresolved.")}`;
+      }
+      showToast("Export blocked: " + (data.detail || "Citation integrity errors"), "error");
+      return;
+    }
+
+    closeModal("modal-export");
 
     // Trigger browser download
     const link = document.createElement("a");
@@ -808,9 +936,186 @@ async function runExport() {
     link.click();
     document.body.removeChild(link);
 
-    showToast(`Manuscript downloaded: ${data.filename}`, "success");
+    showToast(`Manuscript exported successfully: ${data.filename}`, "success");
   } catch (err) {
     showToast("Export failed: " + err.message, "error");
+  }
+}
+
+// Batch PDF Upload Workflow (FR-02)
+async function handleBatchPdfUpload() {
+  const fileInput = document.getElementById("batch-pdf-input");
+  const statusList = document.getElementById("batch-upload-status-list");
+  if (!fileInput || !fileInput.files.length) {
+    showToast("Please select one or more PDF files to upload.", "error");
+    return;
+  }
+
+  const formData = new FormData();
+  formData.append("project_id", state.currentProject.id);
+  for (let i = 0; i < fileInput.files.length; i++) {
+    formData.append("files", fileInput.files[i]);
+  }
+
+  statusList.innerHTML = `<div style="font-size:0.85rem; color:#60A5FA;">Processing ${fileInput.files.length} PDFs (extracting metadata, page numbers, evidence)...</div>`;
+
+  try {
+    const res = await fetch(`${API_BASE}/sources/upload-batch`, {
+      method: "POST",
+      body: formData
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "Batch upload failed");
+
+    statusList.innerHTML = "";
+    data.results.forEach(item => {
+      const div = document.createElement("div");
+      div.style.padding = "8px";
+      div.style.borderRadius = "4px";
+      div.style.fontSize = "0.8rem";
+
+      if (item.status === "success") {
+        div.style.background = "rgba(16, 185, 129, 0.15)";
+        div.style.border = "1px solid #10B981";
+        div.style.color = "#A7F3D0";
+        div.innerHTML = `✓ <strong>${escapeHtml(item.filename)}</strong>: Extracted ${item.pages_extracted} pages, ${item.evidence_extracted} evidence items. [${item.citation_key || "Ref"}]`;
+      } else if (item.status === "duplicate") {
+        div.style.background = "rgba(245, 158, 11, 0.15)";
+        div.style.border = "1px solid #F59E0B";
+        div.style.color = "#FDE68A";
+        div.innerHTML = `⚠️ <strong>${escapeHtml(item.filename)}</strong>: ${escapeHtml(item.message || "Duplicate detected")}`;
+      } else {
+        div.style.background = "rgba(239, 68, 68, 0.15)";
+        div.style.border = "1px solid #EF4444";
+        div.style.color = "#FECACA";
+        div.innerHTML = `✕ <strong>${escapeHtml(item.filename)}</strong>: ${escapeHtml(item.message || "Processing failed")}`;
+      }
+      statusList.appendChild(div);
+    });
+
+    showToast(`Processed ${data.total_processed} files (${data.successful_count} succeeded, ${data.duplicate_count} duplicates)`, "success");
+    await loadSources();
+    await loadEvidence();
+  } catch (err) {
+    statusList.innerHTML = `<div style="color:#EF4444; font-size:0.85rem;">Upload failed: ${escapeHtml(err.message)}</div>`;
+    showToast("Batch upload error: " + err.message, "error");
+  }
+}
+
+// Source Metadata Review & Editing (FR-03.5, FR-10.2)
+function openAddSourceModal() {
+  document.getElementById("edit-source-id").value = "";
+  document.getElementById("edit-source-title").value = "";
+  document.getElementById("edit-source-authors").value = "";
+  document.getElementById("edit-source-year").value = new Date().getFullYear();
+  document.getElementById("edit-source-doi").value = "";
+  document.getElementById("edit-source-venue").value = "";
+  document.getElementById("edit-source-status").value = "unverified";
+  const mismatchBox = document.getElementById("edit-source-mismatch-alerts");
+  if (mismatchBox) mismatchBox.style.display = "none";
+  openModal("modal-edit-source");
+}
+
+window.openEditSourceModal = function(sourceId) {
+  const s = state.sources.find(x => x.id === sourceId);
+  if (!s) return;
+
+  document.getElementById("edit-source-id").value = s.id;
+  document.getElementById("edit-source-title").value = s.title || "";
+  document.getElementById("edit-source-authors").value = s.authors || "";
+  document.getElementById("edit-source-year").value = s.year || "";
+  document.getElementById("edit-source-doi").value = s.doi || "";
+  document.getElementById("edit-source-venue").value = s.venue || "";
+  document.getElementById("edit-source-status").value = s.metadata_verification_status || "unverified";
+
+  const mismatchBox = document.getElementById("edit-source-mismatch-alerts");
+  if (mismatchBox) {
+    if (s.mismatch_notes) {
+      mismatchBox.style.display = "block";
+      mismatchBox.innerHTML = `<strong>Bibliographic Discrepancy Flagged:</strong> ${escapeHtml(s.mismatch_notes)}`;
+    } else {
+      mismatchBox.style.display = "none";
+    }
+  }
+
+  openModal("modal-edit-source");
+};
+
+async function saveSourceMetadata() {
+  const sourceId = document.getElementById("edit-source-id").value;
+  const payload = {
+    title: document.getElementById("edit-source-title").value.trim(),
+    authors: document.getElementById("edit-source-authors").value.trim(),
+    year: parseInt(document.getElementById("edit-source-year").value) || null,
+    doi: document.getElementById("edit-source-doi").value.trim() || null,
+    venue: document.getElementById("edit-source-venue").value.trim() || null,
+    metadata_verification_status: document.getElementById("edit-source-status").value
+  };
+
+  if (!payload.title || !payload.authors) {
+    showToast("Title and Authors are required.", "error");
+    return;
+  }
+
+  try {
+    if (sourceId) {
+      // Update existing
+      const res = await fetch(`${API_BASE}/sources/${sourceId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) throw new Error("Failed to update source metadata");
+      showToast("Bibliographic metadata saved & verified.", "success");
+    } else {
+      // Create new manual record
+      payload.project_id = state.currentProject.id;
+      const res = await fetch(`${API_BASE}/sources`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) throw new Error("Failed to create source");
+      showToast("Source record created.", "success");
+    }
+
+    closeModal("modal-edit-source");
+    await loadSources();
+    await loadGlobalVerificationAudit();
+  } catch (err) {
+    showToast("Save failed: " + err.message, "error");
+  }
+}
+
+async function verifySourceMetadataOnline() {
+  const sourceId = document.getElementById("edit-source-id").value;
+  if (!sourceId) {
+    showToast("Save record first or provide a DOI/Title to verify online.", "info");
+    return;
+  }
+
+  showToast("Comparing metadata with OpenAlex and Crossref records...", "info");
+  try {
+    const res = await fetch(`${API_BASE}/sources/${sourceId}/verify-metadata`);
+    const data = await res.json();
+
+    const mismatchBox = document.getElementById("edit-source-mismatch-alerts");
+    if (data.mismatches && data.mismatches.length > 0) {
+      if (mismatchBox) {
+        mismatchBox.style.display = "block";
+        mismatchBox.innerHTML = `<strong>Mismatches Detected (${data.mismatches.length}):</strong><br>${data.mismatches.map(m => escapeHtml(m)).join("<br>")}`;
+      }
+      document.getElementById("edit-source-status").value = "flagged_mismatch";
+      showToast("Metadata discrepancies flagged against Crossref/OpenAlex", "warning");
+    } else if (data.verified) {
+      if (mismatchBox) mismatchBox.style.display = "none";
+      document.getElementById("edit-source-status").value = "verified";
+      showToast("Bibliographic metadata verified successfully against scholarly records!", "success");
+    } else {
+      showToast(data.message || "Online record lookup did not yield exact matches.", "info");
+    }
+  } catch (err) {
+    showToast("Online verification error: " + err.message, "error");
   }
 }
 

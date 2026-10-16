@@ -75,6 +75,140 @@ class ScholarlyRetrievalService:
         )
     ]
 
+    async def lookup_doi(self, doi: str, allow_test_fixtures: bool = False) -> Optional[ScholarlySearchResultItem]:
+        """Directly queries Crossref and OpenAlex for an exact DOI resolution."""
+        if not doi:
+            return None
+        # Normalize DOI
+        clean_doi = re.sub(r'^(?:https?://(?:dx\.)?doi\.org/|doi:)', '', doi.strip(), flags=re.IGNORECASE).strip()
+        if not clean_doi:
+            return None
+
+        # Check offline fixtures first if permitted
+        if allow_test_fixtures:
+            for fix in self.TEST_FIXTURE_ARCHIVE:
+                if fix.doi and clean_doi.lower() in fix.doi.lower():
+                    return fix
+
+        headers = {"User-Agent": "ResearchScribe/3.0 (mailto:authors@researchscribe.org)"}
+
+        # 1. Try Crossref direct DOI endpoint
+        try:
+            url = f"{self.CROSSREF_URL}/{clean_doi}"
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                resp = await client.get(url, headers=headers)
+                if resp.status_code == 200:
+                    data = resp.json().get("message", {})
+                    title_list = data.get("title", [])
+                    title = title_list[0] if title_list else "Untitled"
+                    authors_list = []
+                    for auth in data.get("author", []):
+                        given = auth.get("given", "")
+                        family = auth.get("family", "")
+                        name = f"{given} {family}".strip()
+                        if name:
+                            authors_list.append(name)
+                    authors_str = ", ".join(authors_list) if authors_list else "Unknown Authors"
+                    issued = data.get("issued", {}).get("date-parts", [[]])[0]
+                    year = issued[0] if issued else None
+                    venue_list = data.get("container-title", [])
+                    venue = venue_list[0] if venue_list else "Scholarly Publication"
+                    cit_key = generate_citation_key(authors_str, year, title)
+
+                    return ScholarlySearchResultItem(
+                        title=title,
+                        authors=authors_str,
+                        year=year,
+                        venue=venue,
+                        doi=f"https://doi.org/{clean_doi}",
+                        url=data.get("URL") or f"https://doi.org/{clean_doi}",
+                        abstract=re.sub(r'<[^>]+>', '', data.get("abstract", "")).strip() or None,
+                        access_status="open",
+                        citation_count=data.get("is-referenced-by-count", 0),
+                        source_provider="crossref",
+                        citation_key=cit_key,
+                        verified_metadata=True
+                    )
+        except Exception as e:
+            logger.debug(f"Direct Crossref DOI lookup failed: {e}")
+
+        # 2. Try OpenAlex direct DOI
+        try:
+            url = f"{self.OPENALEX_URL}/https://doi.org/{clean_doi}"
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                resp = await client.get(url, headers=headers)
+                if resp.status_code == 200:
+                    work = resp.json()
+                    title = work.get("title") or "Untitled"
+                    authors_list = [auth.get("author", {}).get("display_name") for auth in work.get("authorships", []) if auth.get("author", {}).get("display_name")]
+                    authors_str = ", ".join(authors_list) if authors_list else "Unknown Authors"
+                    year = work.get("publication_year")
+                    venue = work.get("primary_location", {}).get("source", {}).get("display_name") or "Scholarly Publication"
+                    cit_key = generate_citation_key(authors_str, year, title)
+                    abstract = self._reconstruct_openalex_abstract(work.get("abstract_inverted_index"))
+
+                    return ScholarlySearchResultItem(
+                        title=title,
+                        authors=authors_str,
+                        year=year,
+                        venue=venue,
+                        doi=f"https://doi.org/{clean_doi}",
+                        url=work.get("primary_location", {}).get("landing_page_url") or f"https://doi.org/{clean_doi}",
+                        abstract=abstract,
+                        access_status="open" if work.get("open_access", {}).get("is_oa") else "restricted",
+                        citation_count=work.get("cited_by_count", 0),
+                        source_provider="openalex",
+                        citation_key=cit_key,
+                        verified_metadata=True
+                    )
+        except Exception as e:
+            logger.debug(f"Direct OpenAlex DOI lookup failed: {e}")
+
+        return None
+
+    def compare_metadata(self, extracted: Dict[str, Any], bibliographic: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Compares metadata extracted from a PDF against stored/authoritative bibliographic metadata.
+        Returns match status and any identified discrepancies.
+        """
+        mismatches = []
+        ext_doi = extracted.get("doi")
+        bib_doi = bibliographic.get("doi")
+
+        if ext_doi and bib_doi:
+            clean_ext = re.sub(r'^(?:https?://(?:dx\.)?doi\.org/|doi:)', '', ext_doi.strip(), flags=re.IGNORECASE).strip().lower()
+            clean_bib = re.sub(r'^(?:https?://(?:dx\.)?doi\.org/|doi:)', '', bib_doi.strip(), flags=re.IGNORECASE).strip().lower()
+            if clean_ext != clean_bib:
+                mismatches.append(f"DOI mismatch: Extracted '{ext_doi}' differs from bibliographic DOI '{bib_doi}'.")
+
+        ext_year = extracted.get("year")
+        bib_year = bibliographic.get("year")
+        if ext_year and bib_year:
+            try:
+                if abs(int(ext_year) - int(bib_year)) > 1:
+                    mismatches.append(f"Publication year discrepancy: PDF indicates {ext_year} while record indicates {bib_year}.")
+            except (ValueError, TypeError):
+                pass
+
+        ext_title = (extracted.get("title") or "").strip().lower()
+        bib_title = (bibliographic.get("title") or "").strip().lower()
+        if ext_title and bib_title and len(ext_title) > 10 and len(bib_title) > 10:
+            words_ext = set(re.findall(r'\b[a-z]{3,}\b', ext_title))
+            words_bib = set(re.findall(r'\b[a-z]{3,}\b', bib_title))
+            if words_ext and words_bib:
+                overlap = len(words_ext.intersection(words_bib)) / max(len(words_ext), len(words_bib))
+                if overlap < 0.25:
+                    mismatches.append(f"Title divergence: Extracted title '{extracted.get('title')}' has low similarity with '{bibliographic.get('title')}'.")
+
+        is_match = len(mismatches) == 0
+        status = "verified" if is_match else "mismatch_flagged"
+        return {
+            "is_match": is_match,
+            "status": status,
+            "mismatches": mismatches,
+            "explanation": "; ".join(mismatches) if mismatches else "Metadata verified and aligned."
+        }
+
     async def search(
         self,
         query: str,
@@ -89,6 +223,19 @@ class ScholarlyRetrievalService:
         """
         results: List[ScholarlySearchResultItem] = []
         apis_reached = False
+
+        # If query is a DOI, attempt exact DOI resolution first
+        if "10." in query and "/" in query:
+            doi_candidate = re.search(r'10\.\d{4,9}/[^\s"<>]+', query)
+            if doi_candidate:
+                exact_paper = await self.lookup_doi(doi_candidate.group(0), allow_test_fixtures=allow_test_fixtures)
+                if exact_paper:
+                    return ScholarlySearchResponse(
+                        query=query,
+                        total=1,
+                        results=[exact_paper],
+                        retrieval_status="success"
+                    )
 
         # 1. Query OpenAlex (rich metadata, open access links, inverted index abstracts)
         try:

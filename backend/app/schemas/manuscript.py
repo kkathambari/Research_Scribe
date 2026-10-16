@@ -66,3 +66,16 @@ class OutlineItem(BaseModel):
 class OutlineGenerateRequest(BaseModel):
     manuscript_id: str
     suggest_standard_sections: bool = True
+
+class ManuscriptUpdate(BaseModel):
+    title: Optional[str] = None
+    citation_style: Optional[str] = None
+    reformat_citations: Optional[bool] = True
+
+class LiteratureReviewGenerateRequest(BaseModel):
+    source_ids: Optional[List[str]] = None
+    selected_source_ids: Optional[List[str]] = None
+    instructions: Optional[str] = None
+    focus_guidance: Optional[str] = None
+    word_limit: Optional[int] = 1200
+    word_target: Optional[int] = None

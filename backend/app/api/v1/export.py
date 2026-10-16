@@ -10,6 +10,7 @@ from app.models.journal import JournalTemplate
 from app.models.verification import Claim
 from app.schemas.export import ExportRequest, ExportResponse
 from app.services.exporter import exporter
+from app.services.verification_engine import verification_engine
 
 router = APIRouter(prefix="/export", tags=["Export"])
 
@@ -32,6 +33,14 @@ def export_manuscript(payload: ExportRequest, db: Session = Depends(get_db)):
                 status_code=400,
                 detail="Guided Mode Gate: Manuscript export is blocked until 'compliance' checkpoint has been reviewed and approved by the researcher."
             )
+
+    # FR-11.6: Pre-export citation integrity check
+    integrity = verification_engine.verify_manuscript_integrity(db, payload.manuscript_id)
+    if not integrity.get("can_export", True) and payload.block_on_critical_errors:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Export blocked due to critical citation-integrity errors: {'; '.join(integrity.get('critical_errors', []))}"
+        )
 
     sections_list = [
         {
@@ -121,7 +130,8 @@ def export_manuscript(payload: ExportRequest, db: Session = Depends(get_db)):
         format=payload.export_format,
         citation_style=payload.citation_style or manuscript.citation_style,
         unresolved_warnings_count=unresolved_warnings,
-        template_applied=template_applied
+        template_applied=template_applied,
+        critical_errors=integrity.get("critical_errors", [])
     )
 
 @router.get("/download/{filename}")
@@ -133,6 +143,7 @@ def download_export(filename: str):
     
     media_types = {
         ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ".pdf": "application/pdf",
         ".md": "text/markdown",
         ".bib": "text/plain"
     }

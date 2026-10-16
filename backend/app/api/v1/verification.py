@@ -193,6 +193,8 @@ def get_verification_report(
     supported_total = counts["supported"] + counts["partially_supported"]
     accuracy = round((supported_total / total * 100), 1) if total > 0 else 100.0
 
+    integrity = citation_verifier.verify_manuscript_integrity(db, manuscript_id)
+
     return VerificationReportResponse(
         manuscript_id=manuscript_id,
         section_id=section_id,
@@ -203,7 +205,11 @@ def get_verification_report(
         unverified_count=counts["unverified"],
         citation_missing_count=counts["citation_missing"],
         accuracy_score=accuracy,
-        claims=claim_responses
+        claims=claim_responses,
+        four_level_audit=integrity.get("four_level_audit"),
+        integrity_audit=integrity.get("integrity_audit"),
+        critical_errors=integrity.get("critical_errors", []),
+        can_export=integrity.get("can_export", True)
     )
 
 @router.put("/claims/{claim_id}/review", response_model=ClaimResponse)

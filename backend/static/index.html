@@ -390,11 +390,18 @@
         <div class="sources-management-view">
           <div class="sources-toolbar">
             <div class="search-input-group">
-              <input type="text" id="scholarly-search-input" class="form-input" placeholder="Search OpenAlex & CrossRef (e.g. 'transformer attention neural network')...">
+              <input type="text" id="scholarly-search-input" class="form-input" placeholder="Search OpenAlex & CrossRef (e.g. 'transformer attention neural network' or DOI '10.1145/...')...">
               <button id="btn-run-scholarly-search" class="btn btn-primary">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
                 Search Papers
               </button>
+            </div>
+            <div class="sources-actions-group" style="display: flex; gap: 8px;">
+              <button id="btn-open-batch-upload" class="btn btn-accent">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                Upload Reference PDFs (FR-02)
+              </button>
+              <button id="btn-add-manual-source" class="btn btn-secondary">+ Manual Record</button>
             </div>
           </div>
 
@@ -405,6 +412,39 @@
               <button id="btn-close-search" class="btn-link">Close Search</button>
             </div>
             <div class="results-cards-grid" id="search-results-grid"></div>
+          </div>
+
+          <!-- Citation & Verification Integrity Summary Card (FR-09) -->
+          <div class="info-card" style="margin-bottom: 20px;">
+            <div class="card-header">
+              <span class="card-title">4-Level Verification & Integrity Audit (FR-09)</span>
+              <button id="btn-run-full-audit" class="btn btn-secondary btn-sm">Re-verify Manuscript Citations</button>
+            </div>
+            <div class="card-body">
+              <div class="verification-levels-grid" id="verification-levels-container" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-bottom: 12px;">
+                <div class="level-box" style="padding: 10px; background: rgba(30, 41, 59, 0.6); border-radius: 6px; border-left: 3px solid #3B82F6;">
+                  <div style="font-size: 0.75rem; color: #94A3B8; text-transform: uppercase;">Level 1: Citations</div>
+                  <div style="font-size: 1.2rem; font-weight: 700; color: #F8FAFC;" id="audit-level-1-count">0</div>
+                  <div style="font-size: 0.75rem; color: #64748B;">Tokens in text</div>
+                </div>
+                <div class="level-box" style="padding: 10px; background: rgba(30, 41, 59, 0.6); border-radius: 6px; border-left: 3px solid #10B981;">
+                  <div style="font-size: 0.75rem; color: #94A3B8; text-transform: uppercase;">Level 2: Metadata</div>
+                  <div style="font-size: 1.2rem; font-weight: 700; color: #F8FAFC;" id="audit-level-2-count">0</div>
+                  <div style="font-size: 0.75rem; color: #64748B;">Verified metadata</div>
+                </div>
+                <div class="level-box" style="padding: 10px; background: rgba(30, 41, 59, 0.6); border-radius: 6px; border-left: 3px solid #8B5CF6;">
+                  <div style="font-size: 0.75rem; color: #94A3B8; text-transform: uppercase;">Level 3: Evidence</div>
+                  <div style="font-size: 1.2rem; font-weight: 700; color: #F8FAFC;" id="audit-level-3-count">0</div>
+                  <div style="font-size: 0.75rem; color: #64748B;">Page-linked passages</div>
+                </div>
+                <div class="level-box" style="padding: 10px; background: rgba(30, 41, 59, 0.6); border-radius: 6px; border-left: 3px solid #EC4899;">
+                  <div style="font-size: 0.75rem; color: #94A3B8; text-transform: uppercase;">Level 4: Claim Support</div>
+                  <div style="font-size: 1.2rem; font-weight: 700; color: #F8FAFC;" id="audit-level-4-count">0</div>
+                  <div style="font-size: 0.75rem; color: #64748B;">Corroborated claims</div>
+                </div>
+              </div>
+              <div id="audit-integrity-alerts" style="font-size: 0.85rem; color: #CBD5E1;"></div>
+            </div>
           </div>
 
           <!-- Research Gap Proposals Card (FR-11) -->
@@ -421,18 +461,19 @@
           <!-- Saved Project Sources -->
           <div class="saved-sources-section">
             <div class="section-title-bar">
-              <span class="subheading">PROJECT CITATION LIBRARY</span>
+              <span class="subheading">PROJECT CITATION & REFERENCE LIBRARY</span>
             </div>
             <div class="table-responsive">
               <table class="data-table">
                 <thead>
                   <tr>
                     <th>Key</th>
-                    <th>Title</th>
+                    <th>Title & Venue</th>
                     <th>Authors</th>
                     <th>Year</th>
-                    <th>Venue</th>
-                    <th>Verified</th>
+                    <th>Metadata Status</th>
+                    <th>PDF & Evidence</th>
+                    <th>Actions</th>
                   </tr>
                 </thead>
                 <tbody id="sources-table-body">
@@ -511,7 +552,7 @@
   <div class="modal-backdrop" id="modal-generate" style="display: none;">
     <div class="modal-dialog">
       <div class="modal-header">
-        <h3 class="modal-title">Grounded Section Generation</h3>
+        <h3 class="modal-title">Grounded Section Generation (FR-06)</h3>
         <button class="modal-close" id="btn-close-gen-modal">&times;</button>
       </div>
       <div class="modal-body">
@@ -519,6 +560,12 @@
         <div class="form-group">
           <label class="form-label">Section Guidance / Focus:</label>
           <textarea id="gen-instructions" class="form-textarea" rows="2" placeholder="e.g., Emphasize the multi-scale cross-attention mechanism and empirical F1 gains..."></textarea>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Select Reference Papers for Literature Review / Grounding (FR-06.8, FR-10.5):</label>
+          <div id="gen-sources-checklist" style="max-height: 140px; overflow-y: auto; background: rgba(15, 23, 42, 0.6); padding: 8px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.1);">
+            <div style="font-size: 0.8rem; color: #94A3B8;">Loading project sources...</div>
+          </div>
         </div>
         <div class="form-group">
           <label class="form-label">Word Target:</label>
@@ -569,7 +616,7 @@
   <div class="modal-backdrop" id="modal-export" style="display: none;">
     <div class="modal-dialog">
       <div class="modal-header">
-        <h3 class="modal-title">Export Research Manuscript (FR-23, FR-26)</h3>
+        <h3 class="modal-title">Export Research Manuscript (FR-11, FR-26)</h3>
         <button class="modal-close" id="btn-close-export-modal">&times;</button>
       </div>
       <div class="modal-body">
@@ -577,6 +624,7 @@
           <label class="form-label">Export Format:</label>
           <select id="export-format-select" class="form-input">
             <option value="docx">Microsoft Word (.docx) — Template-Preserved</option>
+            <option value="pdf">Adobe PDF (.pdf) — Publication Ready</option>
             <option value="markdown">Markdown (.md)</option>
             <option value="bibtex">BibTeX References (.bib)</option>
           </select>
@@ -587,6 +635,13 @@
             Include Evidence & Citation Provenance Audit Table
           </label>
         </div>
+        <div class="form-group checkbox-group">
+          <label>
+            <input type="checkbox" id="export-block-critical" checked>
+            Block export if unresolved critical citation errors exist (FR-11.6)
+          </label>
+        </div>
+        <div id="export-integrity-warning" style="display: none; padding: 10px; background: rgba(239, 68, 68, 0.15); border: 1px solid #EF4444; border-radius: 6px; font-size: 0.85rem; color: #FCA5A5; margin-top: 10px;"></div>
         <div id="export-download-link-box" style="display: none; margin-top: 15px;">
           <a id="export-download-btn" class="btn btn-accent btn-block" href="" download>Download Document</a>
         </div>
@@ -594,6 +649,77 @@
       <div class="modal-footer">
         <button class="btn btn-secondary" id="btn-cancel-export">Close</button>
         <button class="btn btn-primary" id="btn-confirm-export">Generate Export</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 4. Batch Reference PDF Upload Modal (FR-02) -->
+  <div class="modal-backdrop" id="modal-batch-upload" style="display: none;">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3 class="modal-title">Upload Reference Papers (FR-02)</h3>
+        <button class="modal-close" id="btn-close-batch-modal">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="modal-description">Upload one or multiple research papers in PDF format. The system extracts metadata, page-numbered evidence, detects scanned PDFs requiring OCR, and matches records via DOI, OpenAlex, and Crossref.</p>
+        <div class="form-group">
+          <label class="form-label">Select PDF Files:</label>
+          <input type="file" id="batch-pdf-input" class="form-input" accept=".pdf" multiple>
+        </div>
+        <div id="batch-upload-status-list" style="margin-top: 12px; max-height: 200px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px;"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="btn-cancel-batch">Close</button>
+        <button class="btn btn-accent" id="btn-start-batch-upload">Upload & Process</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 5. Edit Source Metadata Modal (FR-03, FR-10) -->
+  <div class="modal-backdrop" id="modal-edit-source" style="display: none;">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3 class="modal-title">Review / Edit Bibliographic Metadata (FR-03.5)</h3>
+        <button class="modal-close" id="btn-close-edit-source-modal">&times;</button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="edit-source-id">
+        <div class="form-group">
+          <label class="form-label">Paper Title:</label>
+          <input type="text" id="edit-source-title" class="form-input" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Authors (comma separated):</label>
+          <input type="text" id="edit-source-authors" class="form-input" required>
+        </div>
+        <div class="form-row-two">
+          <div class="form-group">
+            <label class="form-label">Year:</label>
+            <input type="number" id="edit-source-year" class="form-input">
+          </div>
+          <div class="form-group">
+            <label class="form-label">DOI:</label>
+            <input type="text" id="edit-source-doi" class="form-input" placeholder="10.xxxx/yyyy">
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Journal / Venue:</label>
+          <input type="text" id="edit-source-venue" class="form-input">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Verification Status:</label>
+          <select id="edit-source-status" class="form-input">
+            <option value="verified">Verified (Crossref/OpenAlex/DOI confirmed)</option>
+            <option value="unverified">Unverified (Pending confirmation)</option>
+            <option value="flagged_mismatch">Flagged Mismatch (Extracted vs Bibliographic divergence)</option>
+          </select>
+        </div>
+        <div id="edit-source-mismatch-alerts" style="display: none; padding: 8px; background: rgba(245, 158, 11, 0.15); border: 1px solid #F59E0B; border-radius: 4px; font-size: 0.8rem; color: #FCD34D;"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="btn-cancel-edit-source">Cancel</button>
+        <button class="btn btn-secondary" id="btn-verify-source-online">Lookup Online (DOI/Title)</button>
+        <button class="btn btn-accent" id="btn-save-edit-source">Save Metadata</button>
       </div>
     </div>
   </div>

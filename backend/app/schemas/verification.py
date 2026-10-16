@@ -52,3 +52,7 @@ class VerificationReportResponse(BaseModel):
     citation_missing_count: int
     accuracy_score: float # percentage of supported / partially supported
     claims: List[ClaimResponse]
+    four_level_audit: Optional[dict] = None
+    integrity_audit: Optional[dict] = None
+    critical_errors: Optional[List[str]] = []
+    can_export: Optional[bool] = True

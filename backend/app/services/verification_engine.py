@@ -398,32 +398,251 @@ class CitationVerificationService:
         else:
             return None, 0.0, "unverified", "No relevant textual passage in the source could be matched to the claim."
 
+    UNRESOLVED_PLACEHOLDER_PATTERNS = [
+        r'\[\?+\]',
+        r'\[citation needed\]',
+        r'\[ref\]',
+        r'\[source needed\]',
+        r'\([A-Za-z]+,\s*\?+\)',
+        r'\[\.\.\.\]'
+    ]
+
+    def detect_unresolved_placeholders(self, text: str) -> List[str]:
+        """Detects placeholder citations like [?] or [citation needed] (FR-09.6)."""
+        found = []
+        for pat in self.UNRESOLVED_PLACEHOLDER_PATTERNS:
+            matches = re.findall(pat, text, flags=re.IGNORECASE)
+            found.extend(matches)
+        return list(dict.fromkeys(found))
+
     def verify_manuscript(self, db, manuscript_id: str) -> Dict[str, Any]:
         """Runs citation and claim verification across all sections of a manuscript."""
+        return self.verify_manuscript_integrity(db, manuscript_id)
+
+    def verify_manuscript_integrity(self, db, manuscript_id: str) -> Dict[str, Any]:
+        """
+        Comprehensive FR-09 Citation & Evidence Verification Engine.
+        Evaluates:
+        1. 4 Verification Levels:
+           - Level 1: Citation exists
+           - Level 2: Source metadata verified
+           - Level 3: Supporting evidence identified
+           - Level 4: Claim support verified
+        2. Integrity Checks:
+           - Missing references
+           - Uncited bibliography entries
+           - Duplicate references
+           - Unresolved citation identifiers
+        3. Pre-export clearance (can_export / critical_errors).
+        """
         from app.models.manuscript import Manuscript
         from app.models.source import Source
         from app.models.evidence import Evidence
 
         manuscript = db.query(Manuscript).filter(Manuscript.id == manuscript_id).first()
         if not manuscript:
-            return {"accuracy_score": 100.0, "total_claims": 0}
+            return {
+                "accuracy_score": 100.0,
+                "total_claims": 0,
+                "supported_count": 0,
+                "can_export": True,
+                "critical_errors": []
+            }
 
-        sources = db.query(Source).filter(Source.project_id == manuscript.project_id).all()
-        sources_list = [{"id": s.id, "title": s.title, "citation_key": s.citation_key} for s in sources]
-        evidences = db.query(Evidence).filter(Evidence.project_id == manuscript.project_id).all()
-        ev_list = [{"id": e.id, "source_id": e.source_id, "passage_text": e.passage_text} for e in evidences]
+        sources_db = db.query(Source).filter(Source.project_id == manuscript.project_id).all()
+        sources_list = [
+            {
+                "id": s.id,
+                "title": s.title,
+                "authors": s.authors,
+                "year": s.year or s.publication_year,
+                "venue": s.venue,
+                "doi": s.doi,
+                "citation_key": s.citation_key,
+                "verified_metadata": bool(s.verified_metadata),
+                "metadata_verification_status": s.metadata_verification_status or "verified"
+            }
+            for s in sources_db
+        ]
 
+        evidences_db = db.query(Evidence).filter(Evidence.project_id == manuscript.project_id).all()
+        ev_list = [
+            {
+                "id": e.id,
+                "source_id": e.source_id,
+                "passage_text": e.passage_text,
+                "page_number": e.page_number,
+                "section_name": e.section_name,
+                "category": e.category,
+                "confidence": e.confidence
+            }
+            for e in evidences_db
+        ]
+
+        source_by_id = {s["id"]: s for s in sources_list}
+        sources_with_evidence = {e["source_id"] for e in ev_list if e.get("source_id")}
+
+        # 1. Section-by-section claim and citation evaluation
         total_claims = 0
-        supported = 0
-        for sec in manuscript.sections:
-            if not sec.content:
-                continue
-            rep = self.verify_section_content(manuscript_id, sec.id, sec.content, sources_list, ev_list)
-            total_claims += rep.get("total_claims", 0)
-            supported += rep.get("supported_count", 0)
+        supported_claims = 0
+        partially_supported_claims = 0
+        contradicted_claims = 0
+        unverified_claims = 0
+        missing_citation_claims = 0
 
-        acc = round((supported / total_claims) * 100.0, 1) if total_claims > 0 else 100.0
-        return {"accuracy_score": acc, "total_claims": total_claims, "supported_count": supported}
+        cited_source_ids = set()
+        unresolved_placeholders = []
+        missing_references = []
+        section_reports = []
+
+        total_citations_found = 0
+        level_2_metadata_verified = 0
+        level_3_evidence_identified = 0
+        level_4_claim_verified = 0
+
+        for sec in manuscript.sections:
+            content = sec.content or ""
+            if not content:
+                continue
+
+            # Check placeholders
+            placeholders = self.detect_unresolved_placeholders(content)
+            for p in placeholders:
+                unresolved_placeholders.append({
+                    "section_id": sec.id,
+                    "section_title": sec.title,
+                    "placeholder": p
+                })
+
+            rep = self.verify_section_content(manuscript_id, sec.id, content, sources_list, ev_list)
+            section_reports.append(rep)
+
+            total_claims += rep.get("total_claims", 0)
+            supported_claims += rep.get("supported_count", 0)
+            partially_supported_claims += rep.get("partially_supported_count", 0)
+            contradicted_claims += rep.get("contradicted_count", 0)
+            unverified_claims += rep.get("unverified_count", 0)
+            missing_citation_claims += rep.get("citation_missing_count", 0)
+
+            for c in rep.get("claims", []):
+                for cite in c.get("citations", []):
+                    total_citations_found += 1
+                    s_id = cite.get("source_id")
+                    if s_id:
+                        cited_source_ids.add(s_id)
+                        matched_s = source_by_id.get(s_id)
+                        if matched_s and (matched_s.get("verified_metadata") or matched_s.get("metadata_verification_status") == "verified"):
+                            level_2_metadata_verified += 1
+                        if s_id in sources_with_evidence:
+                            level_3_evidence_identified += 1
+                    else:
+                        missing_references.append({
+                            "section_id": sec.id,
+                            "section_title": sec.title,
+                            "in_text_citation": cite.get("in_text_citation")
+                        })
+
+                if c.get("status") == "supported":
+                    level_4_claim_verified += 1
+
+        # 2. Check for uncited bibliography entries
+        all_source_ids = {s["id"] for s in sources_list}
+        uncited_source_ids = all_source_ids - cited_source_ids
+        uncited_entries = [source_by_id[sid] for sid in uncited_source_ids if sid in source_by_id]
+
+        # 3. Check for duplicate references
+        seen_dois = {}
+        seen_titles = {}
+        duplicates = []
+        for s in sources_list:
+            doi = (s.get("doi") or "").strip().lower()
+            if doi.startswith("https://doi.org/"):
+                doi = doi.replace("https://doi.org/", "")
+            elif doi.startswith("http://dx.doi.org/"):
+                doi = doi.replace("http://dx.doi.org/", "")
+
+            title_norm = re.sub(r'[^a-z0-9]', '', (s.get("title") or "").lower())
+
+            if doi:
+                if doi in seen_dois:
+                    duplicates.append({
+                        "field": "doi",
+                        "value": doi,
+                        "source_1": seen_dois[doi],
+                        "source_2": s["title"]
+                    })
+                else:
+                    seen_dois[doi] = s["title"]
+
+            if title_norm and len(title_norm) > 10:
+                if title_norm in seen_titles:
+                    duplicates.append({
+                        "field": "title",
+                        "value": s.get("title"),
+                        "source_1": seen_titles[title_norm],
+                        "source_2": s["title"]
+                    })
+                else:
+                    seen_titles[title_norm] = s["title"]
+
+        # Critical blocking errors for export
+        critical_errors = []
+        if unresolved_placeholders:
+            critical_errors.append(f"{len(unresolved_placeholders)} unresolved citation placeholder(s) detected in manuscript text (e.g. [?]).")
+        if missing_references:
+            critical_errors.append(f"{len(missing_references)} in-text citation(s) could not be resolved to any source in the project library.")
+        if contradicted_claims > 0:
+            critical_errors.append(f"{contradicted_claims} claim(s) contradict the cited source passage.")
+
+        can_export = len(critical_errors) == 0
+
+        acc = round(((supported_claims + partially_supported_claims) / total_claims) * 100.0, 1) if total_claims > 0 else 100.0
+
+        four_level_audit = {
+            "level_1_citation_exists": {
+                "count": total_citations_found,
+                "description": "In-text citation tokens located in manuscript text."
+            },
+            "level_1_citations_count": total_citations_found,
+            "level_2_metadata_verified": {
+                "count": level_2_metadata_verified,
+                "description": "Citations referencing project sources whose bibliographic metadata is verified."
+            },
+            "level_2_metadata_verified_count": level_2_metadata_verified,
+            "level_3_evidence_identified": {
+                "count": level_3_evidence_identified,
+                "description": "Citations anchored to extracted evidence passages and page locations."
+            },
+            "level_3_evidence_identified_count": level_3_evidence_identified,
+            "level_4_claim_verified": {
+                "count": level_4_claim_verified,
+                "description": "Substantive claims factually and semantically supported by cited evidence."
+            },
+            "level_4_claims_verified_count": level_4_claim_verified
+        }
+
+        integrity_audit = {
+            "missing_references": missing_references,
+            "uncited_entries": [{"id": s["id"], "title": s["title"], "citation_key": s.get("citation_key")} for s in uncited_entries],
+            "duplicate_references": duplicates,
+            "unresolved_placeholders": unresolved_placeholders
+        }
+
+        return {
+            "manuscript_id": manuscript_id,
+            "accuracy_score": acc,
+            "total_claims": total_claims,
+            "supported_count": supported_claims,
+            "partially_supported_count": partially_supported_claims,
+            "contradicted_count": contradicted_claims,
+            "unverified_count": unverified_claims,
+            "citation_missing_count": missing_citation_claims,
+            "four_level_audit": four_level_audit,
+            "integrity_audit": integrity_audit,
+            "can_export": can_export,
+            "critical_errors": critical_errors,
+            "section_reports": section_reports
+        }
 
 citation_verifier = CitationVerificationService()
 verification_engine = citation_verifier

@@ -51,6 +51,22 @@ class ManuscriptExporterService:
             )
             return out_path
 
+        elif export_format == "pdf":
+            filename = f"{clean_name}_{manuscript_id[:8]}.pdf"
+            out_path = settings.EXPORTS_DIR / filename
+            self._generate_pdf(
+                out_path,
+                title,
+                sections,
+                sources,
+                claims,
+                citation_style,
+                include_verification_appendix,
+                abstract=manuscript.get("abstract", ""),
+                target_journal=manuscript.get("target_journal", "")
+            )
+            return out_path
+
         elif export_format == "bibtex":
             filename = f"{clean_name}_{manuscript_id[:8]}.bib"
             out_path = settings.EXPORTS_DIR / filename
@@ -201,12 +217,14 @@ class ManuscriptExporterService:
                 self._render_content_block(doc, sec.get("content", ""))
 
         # Bibliography section if sources present
+        # Bibliography section if sources present
         if sources:
             h_ref = doc.add_heading("References", level=1)
             h_ref.paragraph_format.space_before = Pt(16)
             h_ref.paragraph_format.space_after = Pt(8)
 
-            formatted_refs = citation_formatter.format_bibliography(sources, citation_style)
+            cited_ids = self._extract_cited_identifiers(sections, claims)
+            formatted_refs = citation_formatter.format_cited_bibliography(sources, cited_identifiers=cited_ids, style=citation_style)
             for ref_entry in formatted_refs:
                 p_ref = doc.add_paragraph(ref_entry)
                 p_ref.paragraph_format.left_indent = Inches(0.4)
@@ -250,6 +268,159 @@ class ManuscriptExporterService:
                 row_cells[3].text = claim.get("explanation", "") or "Corroborated by repository evidence."
 
         doc.save(str(out_path))
+
+    def _extract_cited_identifiers(self, sections: List[Dict[str, Any]], claims: Optional[List[Dict[str, Any]]]) -> set:
+        """Extracts all source IDs, citation keys, author surnames, and numeric indices cited across the manuscript."""
+        cited = set()
+        if claims:
+            for c in claims:
+                for cite in c.get("citations", []):
+                    if cite.get("source_id"):
+                        cited.add(cite["source_id"])
+                    if cite.get("citation_key"):
+                        cited.add(cite["citation_key"])
+        for sec in sections:
+            content = sec.get("content", "")
+            for m in re.findall(r'\[(\d+)\]', content):
+                cited.add(m)
+            for m in re.findall(r'\[([A-Za-z0-9_-]+)\]', content):
+                cited.add(m)
+            for m in re.findall(r'\(([A-Za-z]+)(?:\s+et\s+al\.)?,?\s+\d{4}\)', content):
+                cited.add(m)
+            for m in re.findall(r'\((\d+)\)', content):
+                cited.add(m)
+        return cited
+
+    def _generate_pdf(
+        self,
+        out_path: Path,
+        title: str,
+        sections: List[Dict[str, Any]],
+        sources: List[Dict[str, Any]],
+        claims: Optional[List[Dict[str, Any]]],
+        citation_style: str,
+        include_verification_appendix: bool,
+        abstract: str = "",
+        target_journal: str = ""
+    ):
+        """Generates a publication-grade PDF using reportlab."""
+        try:
+            from reportlab.lib.pagesizes import letter
+            from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+            from reportlab.lib import colors
+            from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak
+        except ImportError:
+            md = self._generate_markdown(title, sections, sources, claims, citation_style, include_verification_appendix)
+            out_path.write_text(md, encoding="utf-8")
+            return
+
+        doc = SimpleDocTemplate(str(out_path), pagesize=letter, rightMargin=54, leftMargin=54, topMargin=54, bottomMargin=54)
+        styles = getSampleStyleSheet()
+        story = []
+
+        title_style = ParagraphStyle(
+            'DocTitle',
+            parent=styles['Heading1'],
+            fontSize=18,
+            leading=22,
+            alignment=1,
+            spaceAfter=8,
+            textColor=colors.HexColor('#111827')
+        )
+        meta_style = ParagraphStyle(
+            'DocMeta',
+            parent=styles['Normal'],
+            fontSize=9.5,
+            leading=13,
+            alignment=1,
+            spaceAfter=18,
+            textColor=colors.HexColor('#6B7280')
+        )
+        h1_style = ParagraphStyle(
+            'SectionH1',
+            parent=styles['Heading1'],
+            fontSize=13,
+            leading=17,
+            spaceBefore=14,
+            spaceAfter=6,
+            textColor=colors.HexColor('#1E293B')
+        )
+        h2_style = ParagraphStyle(
+            'SectionH2',
+            parent=styles['Heading2'],
+            fontSize=11,
+            leading=15,
+            spaceBefore=10,
+            spaceAfter=4,
+            textColor=colors.HexColor('#334155')
+        )
+        body_style = ParagraphStyle(
+            'BodyDark',
+            parent=styles['Normal'],
+            fontSize=9.5,
+            leading=14,
+            spaceAfter=6,
+            textColor=colors.HexColor('#0F172A')
+        )
+
+        story.append(Paragraph(title, title_style))
+        story.append(Paragraph(f"ResearchScribe Grounded Manuscript &bull; Citation Style: {citation_style.upper()}", meta_style))
+        story.append(Spacer(1, 10))
+
+        sorted_sections = sorted(sections, key=lambda s: s.get("order", 0))
+        for sec in sorted_sections:
+            sec_title = sec.get("title", "Section")
+            story.append(Paragraph(sec_title, h1_style))
+            content = sec.get("content", "")
+            for block in content.split("\n\n"):
+                block_clean = block.strip()
+                if not block_clean:
+                    continue
+                if block_clean.startswith("### "):
+                    story.append(Paragraph(block_clean.replace("### ", ""), h2_style))
+                elif block_clean.startswith("## "):
+                    story.append(Paragraph(block_clean.replace("## ", ""), h1_style))
+                else:
+                    # Clean XML tags for reportlab Paragraph
+                    safe_block = block_clean.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                    story.append(Paragraph(safe_block, body_style))
+            story.append(Spacer(1, 6))
+
+        # References
+        cited_ids = self._extract_cited_identifiers(sections, claims)
+        formatted_refs = citation_formatter.format_cited_bibliography(sources, cited_identifiers=cited_ids, style=citation_style)
+        if formatted_refs:
+            story.append(Paragraph("References", h1_style))
+            for ref in formatted_refs:
+                safe_ref = ref.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                story.append(Paragraph(safe_ref, body_style))
+                story.append(Spacer(1, 3))
+
+        # Verification appendix
+        if include_verification_appendix and claims:
+            story.append(PageBreak())
+            story.append(Paragraph("Appendix: Citation &amp; Evidence Provenance Audit", h1_style))
+            table_data = [["Claim Assertion", "Evidence / Source", "Status", "Explanation"]]
+            for c in claims:
+                c_text = (c.get("claim_text", "")[:100]).replace('&', '&amp;')
+                citations = c.get("citations", [])
+                src = (citations[0].get("in_text_citation", "Unlinked") if citations else "No Citation").replace('&', '&amp;')
+                st = c.get("status", "unverified").upper()
+                exp = (c.get("explanation") or "")[:120].replace('&', '&amp;')
+                table_data.append([c_text, src, st, exp])
+
+            t = Table(table_data, colWidths=[160, 80, 80, 180])
+            t.setStyle(TableStyle([
+                ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#F1F5F9')),
+                ('TEXTCOLOR', (0,0), (-1,0), colors.HexColor('#0F172A')),
+                ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0,0), (-1,-1), 8),
+                ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor('#CBD5E1')),
+                ('VALIGN', (0,0), (-1,-1), 'TOP')
+            ]))
+            story.append(t)
+
+        doc.build(story)
 
     def _render_content_block(self, doc, content: str, normal_style: str = "Normal"):
         """Renders prose, subsection headers, and markdown tables into docx elements."""
@@ -332,7 +503,8 @@ class ManuscriptExporterService:
         if sources:
             lines.append("## References")
             lines.append("")
-            formatted_refs = citation_formatter.format_bibliography(sources, citation_style)
+            cited_ids = self._extract_cited_identifiers(sections, claims)
+            formatted_refs = citation_formatter.format_cited_bibliography(sources, cited_identifiers=cited_ids, style=citation_style)
             for ref in formatted_refs:
                 lines.append(f"- {ref}")
             lines.append("")
