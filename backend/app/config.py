@@ -17,6 +17,10 @@ class Settings(BaseSettings):
     # Database
     DATABASE_URL: str = f"sqlite:///{BASE_DIR / 'researchscribe.db'}"
     
+    # Server Binding (FR-07: Local-by-default for personal use)
+    HOST: str = os.getenv("HOST", "127.0.0.1")
+    PORT: int = int(os.getenv("PORT", "8000"))
+    
     # LLM Settings
     LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "ollama") # ollama, gemini, heuristic
     OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")

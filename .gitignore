@@ -28,6 +28,8 @@ backend/storage/uploads/*
 !backend/storage/uploads/.gitkeep
 backend/storage/exports/*
 !backend/storage/exports/.gitkeep
+backups/*
+!backups/.gitkeep
 
 # IDEs & System
 .vscode/

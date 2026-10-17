@@ -48,32 +48,54 @@ Unlike generic AI writing tools that fabricate prose and hallucinate citations f
 
 ---
 
-## 🚀 Getting Started
+## 🚀 Getting Started (Docker-Free Windows Local Deployment)
 
-### 1. Environment Setup
-The Python virtual environment is located in `backend/.venv`.
+ResearchScribe runs directly on your Windows workstation without Docker or container overhead, connecting directly to your existing host Ollama service.
 
-```bash
+### 1. Quick Launch (1-Click)
+Double-click `start_researchscribe.bat` in the repository root, or run in PowerShell:
+```powershell
+.\start_researchscribe.ps1
+```
+The launcher automatically verifies the virtual environment (`backend\.venv`), installs requirements, detects your local Ollama daemon at `http://localhost:11434`, and launches the application.
+
+### 2. Manual Startup
+```powershell
 cd backend
-.venv\Scripts\activate
-```
-
-### 2. Run Comprehensive Automated Tests
-Run the test suite verifying all v3.0 subsystems (repository ingestion, AST code analysis, experimental extraction, novelty comparison, guided checkpoints, compliance checks, and exports):
-
-```bash
-.venv\Scripts\python.exe -m pytest tests -v
-```
-
-### 3. Launch ResearchScribe v3.0 Dashboard
-Start the application server:
-
-```bash
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
 python run.py
 ```
 
-- **Interactive Web Dashboard:** [http://localhost:8000](http://localhost:8000)
-- **Interactive OpenAPI Specification:** [http://localhost:8000/docs](http://localhost:8000/docs)
+- **Interactive Web Dashboard:** [http://127.0.0.1:8000](http://127.0.0.1:8000)
+- **Interactive OpenAPI Documentation:** [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
+- **Health Diagnostics:** [http://127.0.0.1:8000/health](http://127.0.0.1:8000/health)
+
+### 3. Local LLM Configuration (Ollama)
+ResearchScribe defaults to local Ollama inference with zero cloud data transmission (`LLM_FALLBACK_PROVIDER=none`):
+```ini
+LLM_PROVIDER=ollama
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_MODEL=deepseek-coder:latest
+LLM_FALLBACK_PROVIDER=none
+```
+Recommended models:
+- **8GB RAM / CPU:** `ollama pull deepseek-coder:latest` or `ollama pull gemma2:2b`
+- **16GB+ RAM / GPU:** `ollama pull mistral:latest` or `ollama pull llama3:latest`
+
+### 4. Data Backup & Restore
+All projects, uploaded PDFs, and SQLite databases persist locally in `backend/`.
+- **Create Backup:** Double-click `backup_data.bat` (creates a timestamped `.zip` in `backups/` with SHA256 checksums).
+- **Restore Data:** Run `restore_data.bat backups\<filename>.zip`.
+See [LOCAL_DEPLOYMENT.md](file:///e:/Writter/LOCAL_DEPLOYMENT.md) for full deployment and troubleshooting instructions.
+
+### 5. Run Automated Tests
+```powershell
+cd backend
+.\.venv\Scripts\python.exe -m pytest -v
+```
+*(All 70 automated tests covering code extraction, literature review, citation verification, Ollama local inference, and Docker-free deployment).*
 
 ---
 
